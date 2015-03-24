@@ -17,7 +17,6 @@
 
 ;; message that consumes a number of blocks 
 (defxstruct log-message ((:reader read-log-message) (:writer write-log-message))
-  (count :uint32) ;; the number of blocks this message consumes
   (id :uint32) ;; msg id
   (control :string) ;; format string
   (args (:varray :string))) ;; args to the format string
@@ -39,6 +38,9 @@
    (stream :initarg :stream
 	   :reader log-stream-stream
 	   :documentation "The underlying mapping-stream")
+   (header :reader log-stream-header
+	   :initarg :header
+	   :documentation "The log header")
    (count :initarg :count 
 	  :reader log-stream-count
 	  :documentation "The numnber of block")
@@ -156,16 +158,43 @@
 ;; ------------
 
     
-(defun make-log-stream (mapping-stream count size)
-  (make-instance 'log-stream
-		 :stream mapping-stream
-		 :count count
-		 :size size))
+(defun make-log-stream (mapping-stream &key (size 512))
+  (file-position mapping-stream 0)
+  (let ((map (mapping-stream-mapping mapping-stream))
+	(header (read-log-header mapping-stream)))
+    ;; validate the header information
+    (unless (= (log-header-size header) size)
+      (error "log header size ~A does not match size ~A" 
+	     (log-header-size header)
+	     size))
+    ;; set the initial stream position
+    (file-position mapping-stream 
+		   (* (1+ (log-header-index header)
+			  size)))
+    ;; make the instance
+    (make-instance 'log-stream
+		   :stream mapping-stream
+		   :header header
+		   :count (truncate (mapping-size map) size)
+		   :size size)))
 
+(defun read-header (log)
+  (let ((pos (file-position (log-stream-stream log))))
+    (file-position (log-stream-stream log) 0)
+    (prog1 (read-log-header (log-stream-stream log))
+      (file-position (log-stream-stream log) pos))))
+
+(defun write-header (header log)
+  (let ((pos (file-position (log-stream-stream log))))
+    (file-position (log-stream-stream log) 0)
+    (prog1 (write-log-header (log-stream-stream log) header)
+      (file-position (log-stream-stream log) pos))))
 
 (defun write-message (msg log)
   (write-log-message log msg)
   (advance-to-next-block log)
+  (incf (log-header-id (log-stream-header log)))
+  (write-header (log-stream-header log) log)
   nil)
 
 (defun read-message (log)
