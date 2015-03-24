@@ -15,11 +15,17 @@
   (size :uint32)
   (index :uint32))
 
+(defxenum log-level
+  (:info 1)
+  (:warning 2)
+  (:error 4))
+
 ;; message that consumes a number of blocks 
 (defxstruct log-message ((:reader read-log-message) (:writer write-log-message))
   (id :uint32) ;; msg id
-  (control :string) ;; format string
-  (args (:varray :string))) ;; args to the format string
+  (lvl log-level :info)
+  (time :uint64)
+  (msg :string))
 
 ;; need a circular block stream type
 ;; it should keep writing to blocks, allocating the next block
@@ -67,7 +73,7 @@
       (log-stream-open-p stream)
     (setf (log-stream-open-p stream) nil)))
 
-(defun check-if-open (stream)
+(defun check-if-open-log (stream)
   "Checks if STREAM is open and signals an error otherwise."
   (unless (open-stream-p stream)
     (error "stream closed")))
@@ -79,7 +85,7 @@
 ;; use this to check if there are more bytes to read
 (defmethod stream-listen ((stream log-stream))
   "checks whether there are bytes left to read -- there are always more bytes to be read because this is a cicular buffer"
-  (check-if-open stream)
+  (check-if-open-log stream)
   nil)
 
 (defmethod stream-file-position ((stream log-stream))
@@ -126,7 +132,7 @@
     (write-byte byte s)
     (when (listen s)
       (file-position s (log-stream-size stream))))
-  nil)
+  byte)
 
 (defmethod stream-finish-output ((stream log-stream))
   (finish-output (log-stream-stream stream)))
@@ -163,14 +169,18 @@
   (let ((map (mapping-stream-mapping mapping-stream))
 	(header (read-log-header mapping-stream)))
     ;; validate the header information
-    (unless (= (log-header-size header) size)
-      (error "log header size ~A does not match size ~A" 
-	     (log-header-size header)
-	     size))
+    (cond
+      ((zerop (log-header-size header))
+       ;; zero size, must be a new header
+       (setf (log-header-size header) size))
+      ((= (log-header-size header) size)
+       (error "log header size ~A does not match size ~A" 
+	      (log-header-size header)
+	      size)))
     ;; set the initial stream position
     (file-position mapping-stream 
-		   (* (1+ (log-header-index header)
-			  size)))
+		   (* (1+ (log-header-index header))
+			  size))
     ;; make the instance
     (make-instance 'log-stream
 		   :stream mapping-stream
@@ -190,8 +200,12 @@
     (prog1 (write-log-header (log-stream-stream log) header)
       (file-position (log-stream-stream log) pos))))
 
-(defun write-message (msg log)
-  (write-log-message log msg)
+(defun write-message (log lvl format-control &rest args)
+  (write-log-message log 
+		     (make-log-message :id (log-header-id (log-stream-header log))
+				       :lvl lvl
+				       :time (get-universal-time)
+				       :msg (apply #'format nil format-control args)))
   (advance-to-next-block log)
   (incf (log-header-id (log-stream-header log)))
   (write-header (log-stream-header log) log)
