@@ -3,7 +3,7 @@
 
 
 (defpackage #:pounds
-  (:use #:cl #:cffi #:trivial-gray-streams)
+  (:use #:cl #:cffi #:trivial-gray-streams #:frpc)
   (:nicknames #:lbs)
   (:export #:open-mapping
 	   #:close-mapping

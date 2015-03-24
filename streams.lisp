@@ -64,22 +64,22 @@
 (defmethod stream-read-sequence ((stream mapping-stream) sequence start end &key)
   "Returns the index of last byte read."
   (declare (fixnum start end))
-  (read-block sequence 
-	      (mapping-stream-mapping stream) 
-	      (mapping-stream-position stream)
-	      :start start
-	      :end end)
+  (read-mapping-block sequence 
+		      (mapping-stream-mapping stream) 
+		      (mapping-stream-position stream)
+		      :start start
+		      :end end)
   (incf (mapping-stream-position stream) (- end start))
   (mapping-stream-position stream))
         
 (defmethod stream-write-sequence ((stream mapping-stream) sequence start end &key)
   "Returns the index of last byte written."
   (declare (fixnum start end))
-  (write-block sequence 
-	       (mapping-stream-mapping stream) 
-	       (mapping-stream-position stream)
-	       :start start
-	       :end end)
+  (write-mapping-block sequence 
+		       (mapping-stream-mapping stream) 
+		       (mapping-stream-position stream)
+		       :start start
+		       :end end)
   (incf (mapping-stream-position stream) (- end start))
   (mapping-stream-position stream))
   
@@ -100,7 +100,8 @@
   "write the byte to the local buffer, flush it if at the end of the buffer"
   (setf (mem-aref (mapping-ptr (mapping-stream-mapping stream)) :uint8
 		  (mapping-stream-position stream))
-	byte))
+	byte)
+  (incf (mapping-stream-position stream)))
 
 (defmethod stream-finish-output ((stream mapping-stream))
   (flush-buffers (mapping-stream-mapping stream)))

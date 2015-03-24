@@ -373,7 +373,7 @@ Returns a MAPPING structure."
 
 )
 
-(defun read-block (sequence mapping offset &key (start 0) end)
+(defun read-mapping-block (sequence mapping offset &key (start 0) end)
   "Read from the mapping offset into the sequence."
   (let ((count (- (or end (length sequence)) start)))
     (do ((i 0 (1+ i)))
@@ -382,7 +382,7 @@ Returns a MAPPING structure."
 	    (mem-aref (mapping-ptr mapping) :uint8 (+ offset i))))
     sequence))
 
-(defun write-block (sequence mapping offset &key (start 0) end)
+(defun write-mapping-block (sequence mapping offset &key (start 0) end)
   "Write the sequence into the mapping."
   (let ((count (- (or end (length sequence)) start)))
     (do ((i 0 (1+ i)))

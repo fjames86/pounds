@@ -9,8 +9,9 @@
   :components
   ((:file "package")
    (:file "ffi" :depends-on ("package"))
-   (:file "streams" :depends-on ("ffi")))
-  :depends-on (:cffi :trivial-gray-streams))
+   (:file "streams" :depends-on ("ffi"))
+   (:file "log" :depends-on ("streams")))
+  :depends-on (:cffi :trivial-gray-streams :frpc))
 
 
 
