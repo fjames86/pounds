@@ -81,7 +81,8 @@
 		       :start start
 		       :end end)
   (incf (mapping-stream-position stream) (- end start))
-  (mapping-stream-position stream))
+  (mapping-stream-position stream)
+  sequence)
   
 (defmethod stream-read-byte ((stream mapping-stream))
   "Returns the byte or :EOF"

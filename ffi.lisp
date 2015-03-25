@@ -78,6 +78,16 @@
     :boolean
   (h handle))
 
+
+;;#define GENERIC_READ                     0x80000000
+;;#define GENERIC_WRITE                    0x40000000
+;;#define GENERIC_EXECUTE                  0x20000000
+;;#define GENERIC_ALL                      0x10000000
+;;
+;;#define FILE_SHARE_READ                  0x00000001
+;;#define FILE_SHARE_WRITE                 0x00000002
+;;#define FILE_SHARE_DELETE                0x00000004
+
 (defcfun (%create-file "CreateFileA" :convention :stdcall)
     handle
   (filename :string)
@@ -107,6 +117,23 @@
   (offset :uint32)
   (offset-high :uint32)
   (handle :pointer))
+
+(defcfun (%lock-file-ex "LockFileEx" :convention :stdcall)
+    :boolean
+  (h handle)
+  (flags :uint32) ;; 2 == exclusive, 1 == fail immediately
+  (reserved :uint32)
+  (low :uint32)
+  (high :uint32)
+  (overlapped :pointer))
+
+(defcfun (%unlock-file-ex "UnlockFileEx" :convention :stdcall)
+    :boolean
+  (h handle)
+  (reserved :uint32)
+  (low :uint32)
+  (high :uint32)
+  (overlapped :pointer))
 
 (defcfun (%write-file "WriteFile" :convention :stdcall)
     :boolean
@@ -146,7 +173,11 @@
 	    (get-last-error))))))
 
 (defstruct mapping 
-  fhandle mhandle ptr size)
+  fhandle 
+  mhandle 
+  ptr 
+  size 
+  (lock (bt:make-lock)))
 
 (defun invalid-handle-p (handle)
   (pointer-eq handle 
@@ -158,7 +189,7 @@
 Returns a MAPPING structure."
   (let ((fhandle (with-foreign-string (s path)
 		   (%create-file s 
-				 #x10000000 ;; access == generic all
+				 #xC0000000 ;; access == generic_read|generic_write
 				 3 ;; mode == share_read|share_write
 				 (null-pointer) ;; attrs
 				 4 ;; disposition == open always
@@ -244,6 +275,44 @@ Returns a MAPPING structure."
 (defun flush-buffers (mapping)
   (%flush-file-buffers (mapping-fhandle mapping)))
 
+;; we lock the first byte and rely on co-operative locking
+(defun lock-mapping (map)
+  (with-foreign-object (overlapped '(:struct overlapped))
+    (setf (foreign-slot-value overlapped '(:struct overlapped)
+			      'offset)
+	  0
+	  (foreign-slot-value overlapped '(:struct overlapped)
+			      'offset-high)
+	  0
+	  (foreign-slot-value overlapped '(:struct overlapped)
+			      'handle)
+	  (null-pointer))
+    (%lock-file-ex (mapping-fhandle map)
+		   2
+		   0
+		   1
+		   0
+		   overlapped)))
+
+(defun unlock-mapping (map)
+  (with-foreign-object (overlapped '(:struct overlapped))
+    (setf (foreign-slot-value overlapped '(:struct overlapped)
+			      'offset)
+	  0
+	  (foreign-slot-value overlapped '(:struct overlapped)
+			      'offset-high)
+	  0
+	  (foreign-slot-value overlapped '(:struct overlapped)
+			      'handle)
+	  (null-pointer))
+    (%unlock-file-ex (mapping-fhandle map)
+		     0
+		     1
+		     0
+		     overlapped)))
+
+
+
 ) 
 
 
@@ -302,6 +371,8 @@ Returns a MAPPING structure."
     (setf (mem-ref b :uint8) 0)
     (%write fd b 1)))
 
+(defcfun (%flock "flock"))
+
 ;; need to work out the size of each field
 (defcstruct stat-info
   (dev :uint32)
@@ -329,7 +400,10 @@ Returns a MAPPING structure."
     (foreign-slot-value stat '(:struct stat-info) 'size)))
 
 (defstruct mapping 
-  fd ptr size)
+  fd 
+  ptr
+  size
+  (lock (bt:make-lock)))
 
 (defun open-mapping (path &key size)
   (let ((fd (with-foreign-string (s path)
@@ -375,20 +449,26 @@ Returns a MAPPING structure."
 
 (defun read-mapping-block (sequence mapping offset &key (start 0) end)
   "Read from the mapping offset into the sequence."
-  (let ((count (- (or end (length sequence)) start)))
-    (do ((i 0 (1+ i)))
-	((= i count))
-      (setf (elt sequence (+ i start))
-	    (mem-aref (mapping-ptr mapping) :uint8 (+ offset i))))
+  (bt:with-lock-held ((mapping-lock mapping))
+    (lock-mapping mapping)
+    (let ((count (- (or end (length sequence)) start)))
+      (do ((i 0 (1+ i)))
+	  ((= i count))
+	(setf (elt sequence (+ i start))
+	      (mem-aref (mapping-ptr mapping) :uint8 (+ offset i)))))
+    (unlock-mapping mapping)
     sequence))
 
 (defun write-mapping-block (sequence mapping offset &key (start 0) end)
   "Write the sequence into the mapping."
-  (let ((count (- (or end (length sequence)) start)))
-    (do ((i 0 (1+ i)))
-	((= i count))
-      (setf (mem-aref (mapping-ptr mapping) :uint8 (+ offset i))
-	    (elt sequence (+ i start))))
-    (flush-buffers mapping)
-    count))
+  (bt:with-lock-held ((mapping-lock mapping))
+    (lock-mapping mapping)
+    (let ((count (- (or end (length sequence)) start)))
+      (do ((i 0 (1+ i)))
+	  ((= i count))
+	(setf (mem-aref (mapping-ptr mapping) :uint8 (+ offset i))
+	      (elt sequence (+ i start))))
+      (flush-buffers mapping)
+      (unlock-mapping mapping)
+      count)))
 

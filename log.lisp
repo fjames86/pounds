@@ -11,6 +11,7 @@
 ;; header that takes up the first block 
 (defxstruct log-header ((:reader read-log-header) (:writer write-log-header))
   (id :uint32)
+  (seqno :uint32)
   (count :uint32)
   (size :uint32)
   (index :uint32))
@@ -52,13 +53,7 @@
 	  :documentation "The numnber of block")
    (size :initarg :size
 	 :reader log-stream-size
-	 :documentation "The size of each block")
-   (index :initform 0 
-	  :accessor log-stream-index
-	  :documentation "Stores the current block index")
-   (offset :initform 0
-	   :accessor log-stream-offset
-	   :documentation "Stores the current offset of the current block")))
+	 :documentation "The size of each block")))
 
 #+:cmu
 (defmethod open-stream-p ((stream log-stream))
@@ -158,35 +153,57 @@
 		  (t 
 		   ;; next block position
 		   (1+ q)))))))
-      (file-position (log-stream-stream stream) new-index))))
+      (file-position (log-stream-stream stream) new-index)
+      new-index)))
 
+(defun advance-to-block (stream index)
+  (declare (type log-stream stream))
+  (let ((offset (* (log-stream-size stream) (1+ index))))
+    (file-position (log-stream-stream stream) offset)
+    offset))
 
 ;; ------------
 
     
 (defun make-log-stream (mapping-stream &key (size 512))
   (file-position mapping-stream 0)
-  (let ((map (mapping-stream-mapping mapping-stream))
-	(header (read-log-header mapping-stream)))
+  (let* ((map (mapping-stream-mapping mapping-stream))
+	 (header (read-log-header mapping-stream))
+	 (count (truncate (mapping-size map) size)))
+
     ;; validate the header information
     (cond
       ((zerop (log-header-size header))
        ;; zero size, must be a new header
-       (setf (log-header-size header) size))
-      ((= (log-header-size header) size)
+       (setf (log-header-size header) size
+	     (log-header-count header) count
+	     (log-header-index header) size))
+      ((not (= (log-header-size header) size))
        (error "log header size ~A does not match size ~A" 
 	      (log-header-size header)
 	      size)))
+
     ;; set the initial stream position
     (file-position mapping-stream 
-		   (* (1+ (log-header-index header))
-			  size))
+		   (log-header-index header))
+
     ;; make the instance
     (make-instance 'log-stream
 		   :stream mapping-stream
 		   :header header
-		   :count (truncate (mapping-size map) size)
+		   :count count
 		   :size size)))
+
+(defun copy-log-stream (log)
+  (let ((header (read-header log)))
+    (make-instance 'log-stream
+		   :stream (make-instance 'mapping-stream
+					  :mapping (mapping-stream-mapping 
+						    (log-stream-stream log)))
+		   :header header
+		   :count (log-header-count header)
+		   :size (log-header-size header))))
+		 
 
 (defun read-header (log)
   (let ((pos (file-position (log-stream-stream log))))
@@ -206,11 +223,86 @@
 				       :lvl lvl
 				       :time (get-universal-time)
 				       :msg (apply #'format nil format-control args)))
-  (advance-to-next-block log)
-  (incf (log-header-id (log-stream-header log)))
-  (write-header (log-stream-header log) log)
+  (let ((index (advance-to-next-block log)))
+    (incf (log-header-id (log-stream-header log)))
+    (incf (log-header-seqno (log-stream-header log)))
+    (setf (log-header-index (log-stream-header log))
+	  index)
+    (write-header (log-stream-header log) log))
   nil)
 
 (defun read-message (log)
   (prog1 (read-log-message log)
     (advance-to-next-block log)))
+
+(defun write-message-to-stream (stream msg)
+  (multiple-value-bind (seconds min hour day month year i1 i2 i3)
+      (decode-universal-time (log-message-time msg))
+    (declare (ignore i1 i2 i3))
+    (format stream
+	    "~A-~A-~A ~A:~A:~A ~A"
+	    year month day hour min seconds
+	    (log-message-msg msg))))
+
+
+(defparameter *default-log-file* "pounds.log")
+(defparameter *default-log* nil)
+
+(defun open-log (&key path count size)
+  (unless count (setf count (* 1024 16)))
+  (unless size (setf size 128))
+  (let ((map (open-mapping (or path *default-log-file*)
+			   :size (* count size))))
+    (make-log-stream (make-mapping-stream map)
+		     :size size)))
+
+(defun close-log (log)
+  (close-mapping (mapping-stream-mapping (log-stream-stream log))))
+
+(defmacro with-open-log ((var &key path count size) &body body)
+  `(let ((,var (open-log :path ,path :count ,count :size ,size)))
+     (unwind-protect (progn ,@body)
+       (close-log ,var))))
+
+
+;; -----------------------
+
+
+(defstruct (follower (:constructor %make-follower))
+  thread exit-p log output)
+
+(defun make-follower (log &optional (output *standard-output*))
+  (%make-follower :log log
+		  :output output))
+
+(defun follow-log (follower)
+  (do ((seqno 0)
+       (log (follower-log follower))
+       (output (follower-output follower)))
+      ((follower-exit-p follower))
+    (sleep 1)
+    (let* ((header (read-header log))
+	   (id (1- (log-header-id header)))
+	   (new-seqno (log-header-seqno header)))
+      (when (< seqno new-seqno)
+	(do ((msg (read-message log) (read-message log)))
+	    ((or (zerop (log-message-id msg))
+		 (>= (log-message-id msg) id)))
+	  (write-message-to-stream output msg)
+	  (terpri output))
+	(setf seqno new-seqno)))))
+
+(defun start-follower (follower)
+  (setf (follower-exit-p follower)
+	nil
+	(follower-thread follower)
+	(bt:make-thread (lambda ()
+			  (follow-log follower)))))
+
+(defun stop-follower (follower)
+  (setf (follower-exit-p follower) t)
+  (bt:join-thread (follower-thread follower))
+  nil)
+
+
+  
