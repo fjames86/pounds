@@ -45,6 +45,7 @@
   id
   lvl
   time
+  tag
   msg)
 
 (defun read-log-message (stream)
@@ -52,6 +53,9 @@
 	(id (nibbles:read-ub32/be stream))
 	(lvl (nibbles:read-ub32/be stream))
 	(time (nibbles:read-ub64/be stream))
+	(tag (let ((octets (nibbles:make-octet-vector 4)))
+	       (read-sequence octets stream)
+	       (flexi-streams:octets-to-string octets)))
 	(len (nibbles:read-ub32/be stream)))
     (let ((octets (nibbles:make-octet-vector len)))
       (read-sequence octets stream)
@@ -63,6 +67,7 @@
 	      (2 :warning)
 	      (4 :error))
        :time time
+       :tag tag
        :msg (flexi-streams:octets-to-string octets)))))
 
 (defun write-log-message (stream message)
@@ -75,6 +80,7 @@
 			     (:error 4))
 			   stream)
     (nibbles:write-ub64/be time stream)
+    (write-sequence (log-stream-tag stream) stream)
     (nibbles:write-ub32/be (length msg) stream)
     (write-sequence (flexi-streams:string-to-octets msg)
 		    stream)))
@@ -99,6 +105,9 @@
    (header :reader log-stream-header
 	   :initarg :header
 	   :documentation "The log header")
+   (tag :reader log-stream-tag
+	:initarg :tag
+	:documentation "the tag")
    (count :initarg :count 
 	  :reader log-stream-count
 	  :documentation "The numnber of block")
@@ -229,7 +238,7 @@
 ;; ------------
 
     
-(defun make-log-stream (mapping-stream &key (size 512))
+(defun make-log-stream (mapping-stream &key (size 512) tag)
   (file-position mapping-stream 0)
   (let* ((map (mapping-stream-mapping mapping-stream))
 	 (header (read-log-header mapping-stream))
@@ -255,6 +264,9 @@
     (let ((log (make-instance 'log-stream
 			      :stream mapping-stream
 			      :header header
+			      :tag (let ((octets (flexi-streams:string-to-octets (or tag "DEBG"))))
+				     (assert (= (length octets) 4))
+				     octets)
 			      :count count
 			      :size size)))
       ;; write the header back to the file
@@ -269,6 +281,7 @@
 					  :mapping (mapping-stream-mapping 
 						    (log-stream-stream log)))
 		   :header header
+		   :tag (log-stream-tag log)
 		   :count (log-header-count header)
 		   :size (log-header-size header))))
 		 
@@ -291,6 +304,7 @@
 		     (make-log-message :id (log-header-id (log-stream-header log))
 				       :lvl lvl
 				       :time (get-universal-time)
+				       :tag (log-stream-tag log)
 				       :msg (apply #'format nil format-control args)))
   (let ((index (advance-to-next-block log)))
     (incf (log-header-id (log-stream-header log)))
@@ -311,8 +325,9 @@
       (decode-universal-time (log-message-time msg))
     (declare (ignore i1 i2 i3))
     (format stream
-	    "~D-~D-~D ~2,'0D:~2,'0D:~2,'0D ~A ~A"
+	    "~D-~D-~D ~2,'0D:~2,'0D:~2,'0D ~A ~A ~A"
 	    year month day hour min seconds
+	    (log-message-tag msg)
 	    (log-message-lvl msg)
 	    (log-message-msg msg))))
 
@@ -320,14 +335,15 @@
 (defparameter *default-count* (* 1024 16))
 (defparameter *default-size* 128)
 
-(defun open-log (&key path count size)
+(defun open-log (&key path count size tag)
   (unless count (setf count *default-count*))
   (unless size (setf size *default-size*))
   (let ((map (open-mapping (or path *default-log-file*)
 			   :size (* count size))))
     (handler-case 
 	(let ((log (make-log-stream (make-mapping-stream map)
-				    :size size)))
+				    :size size
+				    :tag tag)))
 	  log)
       (error (e)
 	(close-mapping map)
@@ -345,12 +361,14 @@
   exit-p 
   log 
   output 
+  tag
   (lvl '(:info :warning :error)))
 
-(defun make-follower (log &optional (stream *standard-output*))
+(defun make-follower (log &key (stream *standard-output*) tag)
   "Make a follower for the log streeam specified. Will output the messages to the stream provided."
   (%make-follower :log (copy-log-stream log)
-		  :output stream))
+		  :output stream
+		  :tag tag))
 
 (defun follow-log (follower)
   "Print the log messages to the output stream until the exit-p flag is signalled."
@@ -365,17 +383,20 @@
 	(do ((done nil))
 	    (done)
 	  (let ((msg (read-message log)))
-	    (when (member (log-message-lvl msg)
-			  (follower-lvl follower))
+	    (when (and (member (log-message-lvl msg)
+			       (follower-lvl follower))
+		       (if (follower-tag follower)
+			   (string-equal (follower-tag follower) (log-message-tag msg))
+			   t))
 	      (write-message-to-stream output msg)
 	      (terpri output))
 	    (when (>= (log-message-id msg) new-id)
 	      (setf done t))))
 	(setf id new-id)))))
 
-(defun start-follower (log &key (stream *standard-output*))
+(defun start-follower (log &key (stream *standard-output*) tag)
   "Start following the log."
-  (setf *follower* (make-follower log stream))
+  (setf *follower* (make-follower log :stream stream :tag tag))
   (advance-to-start (follower-log *follower*))
   (setf (follower-exit-p *follower*)
 	nil
