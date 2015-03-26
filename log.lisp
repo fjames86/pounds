@@ -38,20 +38,25 @@
     (nibbles:write-ub32/be size stream)
     (nibbles:write-ub32/be index stream)))
 
-(defstruct log-message 
+(defconstant +msg-magic+ #x3D5B612E)
+
+(defstruct log-message
+  magic
   id
   lvl
   time
   msg)
 
 (defun read-log-message (stream)
-  (let ((id (nibbles:read-ub32/be stream))
+  (let ((magic (nibbles:read-ub32/be stream))
+	(id (nibbles:read-ub32/be stream))
 	(lvl (nibbles:read-ub32/be stream))
 	(time (nibbles:read-ub64/be stream))
 	(len (nibbles:read-ub32/be stream)))
     (let ((octets (nibbles:make-octet-vector len)))
       (read-sequence octets stream)
       (make-log-message 
+       :magic magic
        :id id
        :lvl (ecase lvl
 	      (1 :info)
@@ -62,6 +67,7 @@
 
 (defun write-log-message (stream message)
   (with-slots (id lvl time msg) message
+    (nibbles:write-ub32/be +msg-magic+ stream)
     (nibbles:write-ub32/be id stream)
     (nibbles:write-ub32/be (ecase lvl
 			     (:info 1)
@@ -202,10 +208,23 @@
       new-index)))
 
 (defun advance-to-block (stream index)
+  "Set the stream position to the block index"
   (declare (type log-stream stream))
   (let ((offset (* (log-stream-size stream) (1+ index))))
     (file-position (log-stream-stream stream) offset)
     offset))
+
+(defun advance-to-start (log)
+  "Reset the log position to the first message"
+  (let ((index 0))
+    (advance-to-block log 0)
+    (do ((magic (nibbles:read-ub32/be log)
+		(nibbles:read-ub32/be log)))
+	((or (= magic +msg-magic+)
+	     (= magic 0)))
+      (incf index)
+      (advance-to-next-block log))
+    (advance-to-block log index)))
 
 ;; ------------
 
@@ -357,7 +376,7 @@
 (defun start-follower (log &key (stream *standard-output*))
   "Start following the log."
   (setf *follower* (make-follower log stream))
-  (advance-to-block (follower-log *follower*) 0)
+  (advance-to-start (follower-log *follower*))
   (setf (follower-exit-p *follower*)
 	nil
 	(follower-thread *follower*)
