@@ -8,25 +8,61 @@
 ;; we want to define a circular log stream from the buffer
 ;; the operations should be to read and write a log structure to/from it
 
-;; header that takes up the first block 
-(defxstruct log-header ((:reader read-log-header) (:writer write-log-header))
-  (id :uint32)
-  (seqno :uint32)
-  (count :uint32)
-  (size :uint32)
-  (index :uint32))
 
-(defxenum log-level
-  (:info 1)
-  (:warning 2)
-  (:error 4))
+(defstruct log-header 
+  id 
+  count
+  size
+  index)
 
-;; message that consumes a number of blocks 
-(defxstruct log-message ((:reader read-log-message) (:writer write-log-message))
-  (id :uint32) ;; msg id
-  (lvl log-level :info)
-  (time :uint64)
-  (msg :string))
+(defun read-log-header (stream)
+  (make-log-header 
+   :id (nibbles:read-ub32/be stream)
+   :count (nibbles:read-ub32/be stream)
+   :size (nibbles:read-ub32/be stream)
+   :index (nibbles:read-ub32/be stream)))
+
+(defun write-log-header (stream header)
+  (with-slots (id count size index) header
+    (nibbles:write-ub32/be id stream)
+    (nibbles:write-ub32/be count stream)
+    (nibbles:write-ub32/be size stream)
+    (nibbles:write-ub32/be index stream)))
+
+(defstruct log-message 
+  id
+  lvl
+  time
+  msg)
+
+(defun read-log-message (stream)
+  (let ((id (nibbles:read-ub32/be stream))
+	(lvl (nibbles:read-ub32/be stream))
+	(time (nibbles:read-ub64/be stream))
+	(len (nibbles:read-ub32/be stream)))
+    (let ((octets (nibbles:make-octet-vector len)))
+      (read-sequence octets stream)
+      (make-log-message 
+       :id id
+       :lvl (ecase lvl
+	      (1 :info)
+	      (2 :warning)
+	      (4 :error))
+       :time time
+       :msg (flexi-streams:octets-to-string octets)))))
+
+(defun write-log-message (stream message)
+  (with-slots (id lvl time msg) message
+    (nibbles:write-ub32/be id stream)
+    (nibbles:write-ub32/be (ecase lvl
+			     (:info 1)
+			     (:warning 2)
+			     (:error 4))
+			   stream)
+    (nibbles:write-ub64/be time stream)
+    (nibbles:write-ub32/be (length msg) stream)
+    (write-sequence (flexi-streams:string-to-octets msg)
+		    stream)))
 
 ;; need a circular block stream type
 ;; it should keep writing to blocks, allocating the next block
@@ -188,11 +224,15 @@
 		   (log-header-index header))
 
     ;; make the instance
-    (make-instance 'log-stream
-		   :stream mapping-stream
-		   :header header
-		   :count count
-		   :size size)))
+    (let ((log (make-instance 'log-stream
+			      :stream mapping-stream
+			      :header header
+			      :count count
+			      :size size)))
+      ;; write the header back to the file
+      ;; this ensures it's initially written when we crated the file
+      (write-header header log)
+      log)))
 
 (defun copy-log-stream (log)
   (let ((header (read-header log)))
@@ -225,7 +265,6 @@
 				       :msg (apply #'format nil format-control args)))
   (let ((index (advance-to-next-block log)))
     (incf (log-header-id (log-stream-header log)))
-    (incf (log-header-seqno (log-stream-header log)))
     (setf (log-header-index (log-stream-header log))
 	  index)
     (write-header (log-stream-header log) log))
@@ -240,8 +279,9 @@
       (decode-universal-time (log-message-time msg))
     (declare (ignore i1 i2 i3))
     (format stream
-	    "~A-~A-~A ~A:~A:~A ~A"
+	    "~D-~D-~D ~2,'0D:~2,'0D:~2,'0D ~A ~A"
 	    year month day hour min seconds
+	    (log-message-lvl msg)
 	    (log-message-msg msg))))
 
 
@@ -253,9 +293,12 @@
   (unless size (setf size 128))
   (let ((map (open-mapping (or path *default-log-file*)
 			   :size (* count size))))
-    (make-log-stream (make-mapping-stream map)
-		     :size size)))
-
+    (handler-case 
+	(make-log-stream (make-mapping-stream map)
+			 :size size)
+      (error ()
+	(close-mapping map)))))
+  
 (defun close-log (log)
   (close-mapping (mapping-stream-mapping (log-stream-stream log))))
 
@@ -272,32 +315,35 @@
   thread exit-p log output)
 
 (defun make-follower (log &optional (output *standard-output*))
-  (%make-follower :log log
+  (%make-follower :log (copy-log-stream log)
 		  :output output))
 
 (defun follow-log (follower)
-  (do ((seqno 0)
-       (log (follower-log follower))
+  (do ((log (follower-log follower))
+       (id 0)
        (output (follower-output follower)))
       ((follower-exit-p follower))
     (sleep 1)
     (let* ((header (read-header log))
-	   (id (1- (log-header-id header)))
-	   (new-seqno (log-header-seqno header)))
-      (when (< seqno new-seqno)
-	(do ((msg (read-message log) (read-message log)))
-	    ((or (zerop (log-message-id msg))
-		 (>= (log-message-id msg) id)))
-	  (write-message-to-stream output msg)
-	  (terpri output))
-	(setf seqno new-seqno)))))
+	   (new-id (1- (log-header-id header))))
+      (when (< id new-id)
+	(do ((done nil))
+	    (done)
+	  (let ((msg (read-message log)))	    
+	    (write-message-to-stream output msg)
+	    (terpri output)
+	    (when (>= (log-message-id msg) new-id)
+	      (setf done t))))
+	(setf id new-id)))))
 
 (defun start-follower (follower)
+  (advance-to-block (follower-log follower) 0)
   (setf (follower-exit-p follower)
 	nil
 	(follower-thread follower)
 	(bt:make-thread (lambda ()
-			  (follow-log follower)))))
+			  (follow-log follower))
+			:name "follower-thread")))
 
 (defun stop-follower (follower)
   (setf (follower-exit-p follower) t)
