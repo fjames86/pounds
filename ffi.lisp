@@ -3,7 +3,7 @@
 
 ;;; this file defines the ffi necessary to mmap a file and read/write blocks
 
-(in-package #:lbs)
+(in-package #:pounds)
 
 #+(or win32 windows)
 (progn

@@ -4,8 +4,13 @@
 
 (defpackage #:pounds
   (:use #:cl #:cffi #:trivial-gray-streams)
-  (:nicknames #:lbs)
   (:export #:open-mapping
 	   #:close-mapping
-	   #:with-open-mapping))
+	   #:mapping-stream-position
+	   #:mapping-stream-mapping
+	   #:mapping-size
+	   #:mapping-stream
+	   #:make-mapping-stream))
+
+
 

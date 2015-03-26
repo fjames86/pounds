@@ -1,8 +1,17 @@
 ;;;; Copyright (c) Frank James 2015 <frank.a.james@gmail.com>
 ;;;; This code is licensed under the MIT license.
 
+(defpackage #:pounds.log
+  (:use #:cl #:pounds #:trivial-gray-streams)
+  (:nicknames #:plog)
+  (:export #:open-log
+	   #:close-log
+	   #:start-follower
+	   #:stop-follower
+	   #:write-message 
+	   #:read-message))
 
-(in-package #:pounds)
+(in-package #:pounds.log)
 
 
 ;; we want to define a circular log stream from the buffer
@@ -258,6 +267,7 @@
       (file-position (log-stream-stream log) pos))))
 
 (defun write-message (log lvl format-control &rest args)
+  "Write a log message"
   (write-log-message log 
 		     (make-log-message :id (log-header-id (log-stream-header log))
 				       :lvl lvl
@@ -271,10 +281,13 @@
   nil)
 
 (defun read-message (log)
-  (prog1 (read-log-message log)
-    (advance-to-next-block log)))
+  "Read the next message from the log"
+  (let ((msg (read-log-message log)))       
+    (advance-to-next-block log)
+    msg))
 
 (defun write-message-to-stream (stream msg)
+  "Format a message tothe stream"
   (multiple-value-bind (seconds min hour day month year i1 i2 i3)
       (decode-universal-time (log-message-time msg))
     (declare (ignore i1 i2 i3))
@@ -284,41 +297,44 @@
 	    (log-message-lvl msg)
 	    (log-message-msg msg))))
 
-
 (defparameter *default-log-file* "pounds.log")
-(defparameter *default-log* nil)
+(defparameter *default-count* (* 1024 16))
+(defparameter *default-size* 128)
 
 (defun open-log (&key path count size)
-  (unless count (setf count (* 1024 16)))
-  (unless size (setf size 128))
+  (unless count (setf count *default-count*))
+  (unless size (setf size *default-size*))
   (let ((map (open-mapping (or path *default-log-file*)
 			   :size (* count size))))
     (handler-case 
-	(make-log-stream (make-mapping-stream map)
-			 :size size)
-      (error ()
-	(close-mapping map)))))
+	(let ((log (make-log-stream (make-mapping-stream map)
+				    :size size)))
+	  log)
+      (error (e)
+	(close-mapping map)
+	(error e)))))
   
 (defun close-log (log)
   (close-mapping (mapping-stream-mapping (log-stream-stream log))))
 
-(defmacro with-open-log ((var &key path count size) &body body)
-  `(let ((,var (open-log :path ,path :count ,count :size ,size)))
-     (unwind-protect (progn ,@body)
-       (close-log ,var))))
-
-
 ;; -----------------------
 
+(defparameter *follower* nil)
 
 (defstruct (follower (:constructor %make-follower))
-  thread exit-p log output)
+  thread 
+  exit-p 
+  log 
+  output 
+  (lvl '(:info :warning :error)))
 
-(defun make-follower (log &optional (output *standard-output*))
+(defun make-follower (log &optional (stream *standard-output*))
+  "Make a follower for the log streeam specified. Will output the messages to the stream provided."
   (%make-follower :log (copy-log-stream log)
-		  :output output))
+		  :output stream))
 
 (defun follow-log (follower)
+  "Print the log messages to the output stream until the exit-p flag is signalled."
   (do ((log (follower-log follower))
        (id 0)
        (output (follower-output follower)))
@@ -329,25 +345,31 @@
       (when (< id new-id)
 	(do ((done nil))
 	    (done)
-	  (let ((msg (read-message log)))	    
-	    (write-message-to-stream output msg)
-	    (terpri output)
+	  (let ((msg (read-message log)))
+	    (when (member (log-message-lvl msg)
+			  (follower-lvl follower))
+	      (write-message-to-stream output msg)
+	      (terpri output))
 	    (when (>= (log-message-id msg) new-id)
 	      (setf done t))))
 	(setf id new-id)))))
 
-(defun start-follower (follower)
-  (advance-to-block (follower-log follower) 0)
-  (setf (follower-exit-p follower)
+(defun start-follower (log &key (stream *standard-output*))
+  "Start following the log."
+  (setf *follower* (make-follower log stream))
+  (advance-to-block (follower-log *follower*) 0)
+  (setf (follower-exit-p *follower*)
 	nil
-	(follower-thread follower)
+	(follower-thread *follower*)
 	(bt:make-thread (lambda ()
-			  (follow-log follower))
+			  (follow-log *follower*))
 			:name "follower-thread")))
 
-(defun stop-follower (follower)
-  (setf (follower-exit-p follower) t)
-  (bt:join-thread (follower-thread follower))
+(defun stop-follower ()
+  "Stop following the log."
+  (setf (follower-exit-p *follower*) t)
+  (bt:join-thread (follower-thread *follower*))
+  (setf *follower* nil)
   nil)
 
 

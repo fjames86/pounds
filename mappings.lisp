@@ -1,7 +1,7 @@
 ;;;; Copyright (c) Frank James 2015 <frank.a.james@gmail.com>
 ;;;; This code is licensed under the MIT license.
 
-(in-package #:lbs)
+(in-package #:pounds)
 
 (defclass mapping-stream (trivial-gray-stream-mixin 
 			   fundamental-binary-input-stream 
