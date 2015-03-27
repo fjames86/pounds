@@ -381,11 +381,24 @@ Returns a MAPPING structure."
   (fd :int32)
   (op :int32))
 
+(defcvar "errno" :int)
+
+(defcfun (%strerror "strerror") :string     
+  (code :int32))
+(defun get-last-error ()
+  (error "failed: ~A" (%strerror *errno*)))
+
+
 (defstruct mapping 
   fd 
   ptr
   size
   (lock (bt:make-lock)))
+
+(defun invalid-pointer-p (handle)
+  (pointer-eq handle 
+	      (make-pointer #+(or x86-64 x64 amd64)#xffffffffffffffff
+			    #-(or x86-64 x64 amd64)#xffffffff)))
 
 (defun open-mapping (path &key size)
   "Opens the file named by PATH and maps it into memory. 
@@ -412,19 +425,19 @@ creating the file."
   ;; the file is now created and the correct size 
   (let ((fd (with-foreign-string (s path)
 	      (%open s 
-		     64 ;; o_creat|o_rdwr
-		     438)))) ;; rw|rw|rw
+		     2 ;; o_rdwr
+		     600)))) ;; rw
     (when (< fd 0)
-      (error "failed to open"))
+      (get-last-error))
     (let ((ptr (%mmap (null-pointer) 
 		      size 
 		      3 ;; prot_read | prot_write
 		      1 ;; map_shared
 		      fd 
 		      0)))
-      (when (null-pointer-p ptr)
+      (when (invalid-pointer-p ptr)
 	(%close fd)
-	(error "failed to mmap"))
+	(get-last-error))
       (make-mapping :fd fd
 		    :ptr ptr
 		    :size size))))
@@ -438,7 +451,8 @@ creating the file."
 
 (defun remap (mapping size)
   "Remap the file. SIZE should be the new size."
-  (%munmap (mapping-ptr mapping))
+  (%munmap (mapping-ptr mapping)
+	   (mapping-size mapping))
   ;; write a byte at size
   (when (> size (mapping-size mapping))
     (write-zero-at (mapping-fd mapping) size))    
@@ -447,8 +461,10 @@ creating the file."
 		    size 
 		    3 ;; prot_read|prot_write
 		    1 ;; map_shared
-		    fd 
+		    (mapping-fd mapping)
 		    0)))
+    (when (invalid-pointer-p ptr)
+      (get-last-error))
     (setf (mapping-ptr mapping) ptr
 	  (mapping-size mapping) size)
     mapping))
