@@ -6,8 +6,9 @@
   (:nicknames #:plog)
   (:export #:open-log
 	   #:close-log
-	   #:start-follower
-	   #:stop-follower
+	   #:copy-log
+	   #:start-following
+	   #:stop-following
 	   #:write-message 
 	   #:read-message))
 
@@ -63,6 +64,7 @@
        :magic magic
        :id id
        :lvl (ecase lvl
+	      (0 :debug)
 	      (1 :info)
 	      (2 :warning)
 	      (4 :error))
@@ -75,6 +77,7 @@
     (nibbles:write-ub32/be +msg-magic+ stream)
     (nibbles:write-ub32/be id stream)
     (nibbles:write-ub32/be (ecase lvl
+			     (:debug 0)
 			     (:info 1)
 			     (:warning 2)
 			     (:error 4))
@@ -274,14 +277,19 @@
       (write-header header log)
       log)))
 
-(defun copy-log-stream (log)
+(defun copy-log (log &key tag)
+  "Make a copy of the log stream, possibly changing the log tag"
   (let ((header (read-header log)))
     (make-instance 'log-stream
 		   :stream (make-instance 'mapping-stream
 					  :mapping (mapping-stream-mapping 
 						    (log-stream-stream log)))
 		   :header header
-		   :tag (log-stream-tag log)
+		   :tag (if tag
+			    (let ((octets (flexi-streams:string-to-octets (or tag "DEBG"))))
+			      (assert (= (length octets) 4))
+			      octets)
+			    (log-stream-tag log))
 		   :count (log-header-count header)
 		   :size (log-header-size header))))
 		 
@@ -366,7 +374,7 @@
 
 (defun make-follower (log &key (stream *standard-output*) tag)
   "Make a follower for the log streeam specified. Will output the messages to the stream provided."
-  (%make-follower :log (copy-log-stream log)
+  (%make-follower :log (copy-log log)
 		  :output stream
 		  :tag tag))
 
@@ -394,7 +402,7 @@
 	      (setf done t))))
 	(setf id new-id)))))
 
-(defun start-follower (log &key (stream *standard-output*) tag)
+(defun start-following (log &key (stream *standard-output*) tag)
   "Start following the log."
   (setf *follower* (make-follower log :stream stream :tag tag))
   (advance-to-start (follower-log *follower*))
@@ -405,7 +413,7 @@
 			  (follow-log *follower*))
 			:name "follower-thread")))
 
-(defun stop-follower ()
+(defun stop-following ()
   "Stop following the log."
   (setf (follower-exit-p *follower*) t)
   (bt:join-thread (follower-thread *follower*))

@@ -148,14 +148,15 @@
 	  (ash offset -32)))
 
 (defun write-file (handle offset sequence &key (start 0) end)
-  (let ((length (length sequence)))
+  (let* ((length (length sequence))
+	 (count (- (or end length) start)))
     (with-foreign-objects ((buffer :uint8 length)
 			   (nbytes :uint32)
 			   (overlapped '(:struct overlapped)))
-      (do ((i start (1+ i)))
-	  ((= i (or end length)))
-	(setf (mem-aref buffer :uint8 (- i start))
-	      (elt sequence i)))
+      (do ((i 0 (1+ i)))
+	  ((= i count))
+	(setf (mem-aref buffer :uint8 i)
+	      (elt sequence (+ start i))))
       (multiple-value-bind (offset-low offset-high) (split-offset offset)
 	(setf (foreign-slot-value overlapped '(:struct overlapped)
 				  'offset)
@@ -187,6 +188,24 @@
 (defun open-mapping (path &key size)
   "Opens a file named by PATHSPEC and maps it into memory. If the file is too small it is extended. 
 Returns a MAPPING structure."
+  ;; open, extend and close the file using regular CL functions first 
+  (with-open-file (f path 
+		     :direction :io 
+		     :if-exists :overwrite 
+		     :if-does-not-exist :create
+		     :element-type '(unsigned-byte 8))
+    (let ((length (file-length f)))
+      (cond
+	((zerop length)
+	 (unless size (error "Must provide a size when creating mapping file"))
+	 (file-position f size)
+	 (write-byte 0 f))
+	((and size (> size length))
+	 (file-position f size)
+	 (write-byte 0 f))
+	((not size) 
+	 (setf size length)))))
+
   (let ((fhandle (with-foreign-string (s path)
 		   (%create-file s 
 				 #xC0000000 ;; access == generic_read|generic_write
@@ -204,7 +223,9 @@ Returns a MAPPING structure."
 	 (handler-case (write-file fhandle size #(0))
 	   (error (e)
 	     (%close-handle fhandle)
-	     (error e)))))
+	     (error e)))
+	 (%close-handle fhandle)
+	 (open-mapping path :size size)))
       ((and (not size) 
 	    (zerop (%get-file-size fhandle (null-pointer))))
        (%close-handle fhandle)
