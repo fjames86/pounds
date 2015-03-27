@@ -105,7 +105,7 @@
    (stream :initarg :stream
 	   :reader log-stream-stream
 	   :documentation "The underlying mapping-stream")
-   (header :reader log-stream-header
+   (header :accessor log-stream-header
 	   :initarg :header
 	   :documentation "The log header")
    (tag :reader log-stream-tag
@@ -277,16 +277,18 @@
       (write-header header log)
       log)))
 
-(defun copy-log (log &key tag)
+(defun copy-log (log &key tag copy-stream)
   "Make a copy of the log stream, possibly changing the log tag"
   (let ((header (read-header log)))
     (make-instance 'log-stream
-		   :stream (make-instance 'mapping-stream
-					  :mapping (mapping-stream-mapping 
-						    (log-stream-stream log)))
+		   :stream (if copy-stream
+			       (make-instance 'mapping-stream
+					      :mapping (mapping-stream-mapping 
+							(log-stream-stream log)))
+			       (log-stream-stream log))
 		   :header header
 		   :tag (if tag
-			    (let ((octets (flexi-streams:string-to-octets (or tag "DEBG"))))
+			    (let ((octets (flexi-streams:string-to-octets tag)))
 			      (assert (= (length octets) 4))
 			      octets)
 			    (log-stream-tag log))
@@ -306,6 +308,14 @@
     (prog1 (write-log-header (log-stream-stream log) header)
       (file-position (log-stream-stream log) pos))))
 
+(defun incf-header-id (log)
+  (let ((pos (file-position (log-stream-stream log))))
+    (file-position (log-stream-stream log) 0)
+    (let ((id (nibbles:read-ub32/be (log-stream-stream log))))
+      (nibbles:write-ub32/be (1+ id) (log-stream-stream log)))
+    (file-position (log-stream-stream log) pos)))
+
+
 (defun write-message (log lvl format-control &rest args)
   "Write a log message"
   (write-log-message log 
@@ -315,10 +325,12 @@
 				       :tag (log-stream-tag log)
 				       :msg (apply #'format nil format-control args)))
   (let ((index (advance-to-next-block log)))
-    (incf (log-header-id (log-stream-header log)))
-    (setf (log-header-index (log-stream-header log))
-	  index)
-    (write-header (log-stream-header log) log))
+    ;; increment the log id and set the new index
+    (let ((new-header (read-header log)))
+      (incf (log-header-id new-header))
+      (setf (log-header-index new-header) index
+	    (log-stream-header log) new-header)    
+      (write-header new-header log)))
   nil)
 
 (defun read-message (log)
@@ -374,7 +386,7 @@
 
 (defun make-follower (log &key (stream *standard-output*) tag)
   "Make a follower for the log streeam specified. Will output the messages to the stream provided."
-  (%make-follower :log (copy-log log)
+  (%make-follower :log (copy-log log :copy-stream t)
 		  :output stream
 		  :tag tag))
 
