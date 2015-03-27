@@ -237,21 +237,24 @@ Returns a MAPPING structure."
 
 (defun close-mapping (mapping)
   "Closes the mapping structure."
+  (declare (type mapping mapping))
   (with-slots (fhandle mhandle ptr) mapping
     (%unmap-view-of-file ptr)
     (%close-handle mhandle)
     (%close-handle fhandle)))
 
-(defun remap (mapping &optional size)
+(defun remap (mapping size)
   "Remaps the file mapping to the new size."
   (let ((fhandle (mapping-fhandle mapping)))
+    ;; close the file mapping 
     (with-slots (mhandle ptr) mapping
 	(%unmap-view-of-file ptr)
       (%close-handle mhandle))
-    ;; write a byte at the specified offset
-    (if size 
-	(write-file fhandle size #(0))
-	(setf size (%get-file-size fhandle (null-pointer))))
+
+    ;; extend the file if we need to 
+    (when (> size (mapping-size mapping))
+      (write-file fhandle size #(0)))
+
     ;; remap
     (let ((mhandle (%create-file-mapping fhandle
 					 (null-pointer) ;; attrs
@@ -269,10 +272,12 @@ Returns a MAPPING structure."
 	(when (null-pointer-p ptr)
 	  (get-last-error))
 	(setf (mapping-mhandle mapping) mhandle
-	      (mapping-ptr mapping) ptr))))
+	      (mapping-ptr mapping) ptr
+	      (mapping-size mapping) size))))
   mapping)
 
 (defun flush-buffers (mapping)
+  "Ensure changes to the file mapping are written to disk."
   (%flush-file-buffers (mapping-fhandle mapping)))
 
 ;; we lock the first byte and rely on co-operative locking
@@ -330,8 +335,8 @@ Returns a MAPPING structure."
     :pointer
   (addr :pointer)
   (length size-t)
-  (prot :int32)
-  (flags :int32)
+  (prot :int32) ;; prot_read == 1, prot_write == 2
+  (flags :int32) ;; map_shared == 1
   (fd :int32)
   (offset size-t))
 
@@ -343,8 +348,8 @@ Returns a MAPPING structure."
 (defcfun (%open "open")
     :int32
   (path :string)
-  (flags :int32)
-  (mode :int32))
+  (flags :int32) ;; 64 == o_creat|o_rdwr
+  (mode :int32)) ;; 438 == rw|rw|rw
 
 (defcfun (%close "close")
     :int32
@@ -371,33 +376,10 @@ Returns a MAPPING structure."
     (setf (mem-ref b :uint8) 0)
     (%write fd b 1)))
 
-(defcfun (%flock "flock"))
-
-;; need to work out the size of each field
-(defcstruct stat-info
-  (dev :uint32)
-  (inode :uint32)
-  (mode :uint32)
-  (nlink :uint32)
-  (uid :uint32)
-  (gid :uint32)
-  (dev :uint32)
-  (size size-t)
-  (blksize size-t)
-  (blkcnt size-t)
-  (atime size-t)
-  (mtime size-t)
-  (ctime size-t))
-
-(defcfun (%fstat "fstat")
+(defcfun (%flock "flock")
     :int32
   (fd :int32)
-  (stat :pointer))
-
-(defun get-file-size (fd)
-  (with-foreign-object (stat '(:struct stat-info))
-    (%fstat fd stat)
-    (foreign-slot-value stat '(:struct stat-info) 'size)))
+  (op :int32))
 
 (defstruct mapping 
   fd 
@@ -406,21 +388,40 @@ Returns a MAPPING structure."
   (lock (bt:make-lock)))
 
 (defun open-mapping (path &key size)
+  "Opens the file named by PATH and maps it into memory. 
+
+If SIZE is provided, the file is first extended to be SIZE bytes. SIZE must be provided when 
+creating the file."
+  ;; use regular CL functions to create the file and check its length
+  (with-open-file (f path 
+		     :direction :io 
+		     :if-exists :overwrite 
+		     :if-does-not-exist :create
+		     :element-type '(unsigned-byte 8))
+    (let ((length (file-length f)))
+      (cond
+	((zerop length)
+	 (unless size (error "Must provide a size when creating mapping file"))
+	 (file-position f size)
+	 (write-byte 0 f))
+	((and size (> size length))
+	 (file-position f size)
+	 (write-byte 0 f))
+	((not size) 
+	 (setf size length)))))
+  ;; the file is now created and the correct size 
   (let ((fd (with-foreign-string (s path)
-	      (%open s 0 0))))
+	      (%open s 
+		     64 ;; o_creat|o_rdwr
+		     438)))) ;; rw|rw|rw
     (when (< fd 0)
       (error "failed to open"))
-    (cond
-      (size 
-       (when (< size (get-file-size fd))
-	 (write-zero-at (mapping-fd mapping) size)))
-      ((and (not size) 
-	    (zerop (get-file-size fd)))
-       (%close fd)
-       (error "Must provide a size when creating file"))
-      (t 
-       (setf size (get-file-size fd))))
-    (let ((ptr (%mmap (null-pointer) size 0 0 fd 0)))
+    (let ((ptr (%mmap (null-pointer) 
+		      size 
+		      3 ;; prot_read | prot_write
+		      1 ;; map_shared
+		      fd 
+		      0)))
       (when (null-pointer-p ptr)
 	(%close fd)
 	(error "failed to mmap"))
@@ -429,21 +430,40 @@ Returns a MAPPING structure."
 		    :size size))))
   
 (defun close-mapping (mapping)
+  "Close the file mapping."
+  (declare (type mapping mapping))
   (%munmap (mapping-ptr mapping) 
 	   (mapping-size mapping))
   (%close (mapping-fd mapping)))
 
-(defun remap (mapping &optional size)
+(defun remap (mapping size)
+  "Remap the file. SIZE should be the new size."
   (%munmap (mapping-ptr mapping))
   ;; write a byte at size
-  (when size
-    (write-zero-at (mapping-fd mapping) size))
+  (when (> size (mapping-size mapping))
+    (write-zero-at (mapping-fd mapping) size))    
   ;; remap 
-  (let ((ptr (%mmap (null-pointer) size 0 0 fd 0)))
-    (setf (mapping-ptr mapping) ptr)))
+  (let ((ptr (%mmap (null-pointer) 
+		    size 
+		    3 ;; prot_read|prot_write
+		    1 ;; map_shared
+		    fd 
+		    0)))
+    (setf (mapping-ptr mapping) ptr
+	  (mapping-size mapping) size)
+    mapping))
   
 (defun flush-buffers (mapping)
+  "Ensure changes to the file mappign are written to disk"
   (%fsync (mapping-fd mapping)))
+
+(defun lock-mapping (map)
+  (%flock (mapping-fd map)
+	  1)) ;; lock_sh
+
+(defun unlock-mapping (map)
+  (%flock (mapping-fd map)
+	  8)) ;; lock_un
 
 )
 
