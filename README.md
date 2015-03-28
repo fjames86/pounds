@@ -23,7 +23,7 @@ The package POUNDS.LOG (nickname PLOG) implements a circular log by writing to t
 ```
 (defvar *mylog* (pounds.log:open-log))
 
-(pounds.log:write-message *mylog* :info "Hello from Lisp. 1 + 2 == ~A" (+ 1 2))
+(pounds.log:write-message *mylog* :info (format nil "Hello from Lisp. 1 + 2 == ~A" (+ 1 2)))
 
 (pounds.log:close-log *mylog*)
 ```
@@ -36,6 +36,9 @@ Follow the log's output by using the command:
 ``` 
 
 It is often the case that several different modules may wish to share the same log file.
+To syncronize multiple threads writing to the log, you MUST only open the log once. Other
+sub-modles may copy the log so that they can use different tags. They will share the same 
+underlying file mapping (and mutex for syncronization). 
 ```
 (defvar *log1* (pounds.log:open-log :tag "LOG1"))
 (defvar *log2* (pounds.log:copy-log *log1* :tag "LOG2"))
@@ -46,7 +49,8 @@ It is often the case that several different modules may wish to share the same l
 
 ## 3. Notes
 
-The primary development platform was SBCL on Windows. I've also used it on Linux without trouble.
+The primary development platform was SBCL on Windows but it should also work on Linux. It may work on other unix-like platforms but
+I've not tested it there.
 
 ## License
 
