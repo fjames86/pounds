@@ -11,7 +11,7 @@
    (:file "ffi" :depends-on ("package"))
    (:file "mappings" :depends-on ("ffi"))
    (:file "log" :depends-on ("mappings")))
-  :depends-on (:cffi :trivial-gray-streams :nibbles :flexi-streams :bordeaux-threads))
+  :depends-on (:cffi :trivial-gray-streams :nibbles :babel :bordeaux-threads))
 
 
 

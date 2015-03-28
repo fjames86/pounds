@@ -10,7 +10,8 @@
 	   #:mapping-stream-mapping
 	   #:mapping-size
 	   #:mapping-stream
-	   #:make-mapping-stream))
+	   #:make-mapping-stream
+	   #:with-locked-mapping))
 
 
 

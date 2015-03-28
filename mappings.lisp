@@ -130,3 +130,7 @@
        (with-mapping-stream (,var ,gmapping)
 	 ,@body))))
 
+(defmacro with-locked-mapping ((mapping-stream) &body body)
+  `(bt:with-lock-held ((mapping-lock (mapping-stream-mapping ,mapping-stream)))
+     ,@body))
+

@@ -20,24 +20,31 @@
 
 
 (defstruct log-header 
-  id 
+  id ;; id of next msg to write
+  index ;; index of next msg to write
   count
-  size
-  index)
+  size)
 
 (defun read-log-header (stream)
+  (declare (type stream stream))
   (make-log-header 
    :id (nibbles:read-ub32/be stream)
+   :index (nibbles:read-ub32/be stream)
    :count (nibbles:read-ub32/be stream)
-   :size (nibbles:read-ub32/be stream)
-   :index (nibbles:read-ub32/be stream)))
+   :size (nibbles:read-ub32/be stream)))
 
 (defun write-log-header (stream header)
-  (with-slots (id count size index) header
+  (declare (type stream stream)
+	   (type log-header header))
+  (let ((id (log-header-id header))
+	(count (log-header-count header))
+	(size (log-header-size header))
+	(index (log-header-index header)))
     (nibbles:write-ub32/be id stream)
+    (nibbles:write-ub32/be index stream)
     (nibbles:write-ub32/be count stream)
-    (nibbles:write-ub32/be size stream)
-    (nibbles:write-ub32/be index stream)))
+    (nibbles:write-ub32/be size stream)))
+
 
 (defconstant +msg-magic+ #x3D5B612E)
 
@@ -50,198 +57,103 @@
   msg)
 
 (defun read-log-message (stream)
+  (declare (type stream stream))
   (let ((magic (nibbles:read-ub32/be stream))
 	(id (nibbles:read-ub32/be stream))
 	(lvl (nibbles:read-ub32/be stream))
 	(time (nibbles:read-ub64/be stream))
 	(tag (let ((octets (nibbles:make-octet-vector 4)))
 	       (read-sequence octets stream)
-	       (flexi-streams:octets-to-string octets)))
+	       (babel:octets-to-string octets)))
 	(len (nibbles:read-ub32/be stream)))
+    (assert (= magic +msg-magic+))
     (let ((octets (nibbles:make-octet-vector len)))
       (read-sequence octets stream)
       (make-log-message 
        :magic magic
        :id id
        :lvl (ecase lvl
-	      (0 :debug)
 	      (1 :info)
 	      (2 :warning)
 	      (4 :error))
        :time time
        :tag tag
-       :msg (flexi-streams:octets-to-string octets)))))
+       :msg (babel:octets-to-string octets)))))
 
 (defun write-log-message (stream message)
-  (with-slots (id lvl time msg) message
+  (declare (type stream stream)
+	   (type log-message message))
+  (let ((msg (log-message-msg message)))
+    (declare (type string msg))
     (nibbles:write-ub32/be +msg-magic+ stream)
-    (nibbles:write-ub32/be id stream)
-    (nibbles:write-ub32/be (ecase lvl
-			     (:debug 0)
+    (nibbles:write-ub32/be (log-message-id message) stream)
+    (nibbles:write-ub32/be (ecase (log-message-lvl message)
 			     (:info 1)
 			     (:warning 2)
 			     (:error 4))
 			   stream)
-    (nibbles:write-ub64/be time stream)
-    (write-sequence (log-stream-tag stream) stream)
+    (nibbles:write-ub64/be (log-message-time message) stream)
+    (write-sequence (log-message-tag message) stream)
     (nibbles:write-ub32/be (length msg) stream)
-    (write-sequence (flexi-streams:string-to-octets msg)
+    (write-sequence (babel:string-to-octets msg)
 		    stream)))
 
-;; need a circular block stream type
-;; it should keep writing to blocks, allocating the next block
-;; as it goes. it should wrap around to the beginning if it hits 
-;; the end of file. should use the underlying mapping-stream type
-;; to do the IO. this stream should merely be controlling the 
-;; current mapping/block offset.
+(defstruct (plog (:constructor %make-plog)
+		 (:copier %copy-plog))
+  stream count size tag)
 
-(defclass log-stream (trivial-gray-stream-mixin 
-			   fundamental-binary-input-stream 
-			   fundamental-binary-output-stream)
-  (#+cmu
-   (open-p :initform t
-           :accessor log-stream-open-p
-           :documentation "For CMUCL we have to keep track of this manually.")
-   (stream :initarg :stream
-	   :reader log-stream-stream
-	   :documentation "The underlying mapping-stream")
-   (header :accessor log-stream-header
-	   :initarg :header
-	   :documentation "The log header")
-   (tag :reader log-stream-tag
-	:initarg :tag
-	:documentation "the tag")
-   (count :initarg :count 
-	  :reader log-stream-count
-	  :documentation "The numnber of block")
-   (size :initarg :size
-	 :reader log-stream-size
-	 :documentation "The size of each block")))
-
-#+:cmu
-(defmethod open-stream-p ((stream log-stream))
-  "Returns a true value if STREAM is open.  See ANSI standard."
-  (log-stream-open-p stream))
-
-#+:cmu
-(defmethod close ((stream log-stream) &key abort)
-  "Closes the stream STREAM.  See ANSI standard."
-  (declare (ignore abort))
-  (prog1
-      (log-stream-open-p stream)
-    (setf (log-stream-open-p stream) nil)))
-
-(defun check-if-open-log (stream)
-  "Checks if STREAM is open and signals an error otherwise."
-  (unless (open-stream-p stream)
-    (error "stream closed")))
-
-(defmethod stream-element-type ((stream log-stream))
-  "The element type is always OCTET by definition."
-  '(unsigned-byte 8))
-
-;; use this to check if there are more bytes to read
-(defmethod stream-listen ((stream log-stream))
-  "checks whether there are bytes left to read -- there are always more bytes to be read because this is a cicular buffer"
-  (check-if-open-log stream)
-  nil)
-
-(defmethod stream-file-position ((stream log-stream))
-  "Simply returns the index into the underlying vector."
-  ;; the position of the stream is the position of the underlying mapping stream
-  (stream-file-position (log-stream-stream stream)))
-
-(defmethod (setf stream-file-position) (position-spec (stream log-stream))
-  "Sets the index into the underlying vector if POSITION-SPEC is acceptable."
-  (setf (stream-file-position (log-stream-stream stream))
-	position-spec))
-
-(defmethod stream-read-sequence ((stream log-stream) sequence start end &key)
-  "Returns the index of last byte read."
-  (declare (fixnum start end))
-  (let ((count (- end start)))
-    (do ((i 0 (1+ i)))
-	((= i count))
-      (setf (elt sequence (+ start i))
-	    (read-byte stream)))
-    count))
-        
-(defmethod stream-write-sequence ((stream log-stream) sequence start end &key)
-  "Returns the index of last byte written."
-  (declare (fixnum start end))
-  (let ((count (- end start)))
-    (do ((i 0 (1+ i)))
-	((= i count))
-      (write-byte (elt sequence (+ start i)) stream))
-    sequence))
-  
-(defmethod stream-read-byte ((stream log-stream))
-  "Returns the byte or :EOF. We NEVER return eof because we always wrap around."
-  (let ((b (read-byte (log-stream-stream stream))))
-    (when (listen (log-stream-stream stream))
-      ;; we reached the eof, rewind to the start
-      (file-position (log-stream-stream stream) 
-		     (log-stream-size stream)))
-    b))
-  
-(defmethod stream-write-byte ((stream log-stream) byte)
-  "write the byte to the local buffer, flush it if at the end of the buffer"
-  (let ((s (log-stream-stream stream)))
-    (write-byte byte s)
-    (when (listen s)
-      (file-position s (log-stream-size stream))))
-  byte)
-
-(defmethod stream-finish-output ((stream log-stream))
-  (finish-output (log-stream-stream stream)))
-
-(defmethod stream-force-output ((stream log-stream))
-  (force-output (log-stream-stream stream)))
-
-(defun advance-to-next-block (stream)
-  (declare (type log-stream stream))
-  (let ((index (mapping-stream-position (log-stream-stream stream))))
+(defun advance-to-next-block (log)
+  "Advance the stream position to the start of the next block."
+  (declare (type plog log))
+  (let ((offset (mapping-stream-position (plog-stream log))))
     ;; set the index to the start of the next block
     ;; recall that the first block is reserved for the header
-    (let ((new-index 
-	   (multiple-value-bind (q r) (truncate index (log-stream-size stream))
-	     (* (log-stream-size stream)
-		(cond
-		  ((= q (1- (log-stream-count stream)))
-		   ;; we are in the final block -- move back to the start
-		   1)
-		  ((zerop r)
-		   ;; we just happen to be at the start of a new block- -- do nothing
-		   q)
-		  (t 
-		   ;; next block position
-		   (1+ q)))))))
-      (file-position (log-stream-stream stream) new-index)
+    (let ((new-index
+	   (multiple-value-bind (q r) (truncate offset (plog-size log))
+	     (cond
+	       ((= q (1- (plog-count log)))
+		;; we are in the final block -- move back to the start
+		1)
+	       ((zerop r)
+		;; we just happen to be at the start of a new block- -- do nothing
+		q)
+	       (t 
+		;; next block position
+		(1+ q))))))
+      (file-position (plog-stream log)
+		     (* (plog-size log) new-index))
       new-index)))
 
-(defun advance-to-block (stream index)
+(defun advance-to-block (log index)
   "Set the stream position to the block index"
-  (declare (type log-stream stream))
-  (let ((offset (* (log-stream-size stream) (1+ index))))
-    (file-position (log-stream-stream stream) offset)
-    offset))
+  (let ((offset (* (plog-size log) index)))
+    (file-position (plog-stream log) offset)))
 
-(defun advance-to-start (log)
-  "Reset the log position to the first message"
-  (let ((index 0))
-    (advance-to-block log 0)
-    (do ((magic (nibbles:read-ub32/be log)
-		(nibbles:read-ub32/be log)))
+(defun advance-to-next (log)
+  "Reset the log position of the next message."
+  (declare (type plog log))
+  (let ((init-index (header-index log))
+	(stream (plog-stream log)))
+    (advance-to-block log init-index)
+    (do ((index init-index)
+	 (end-index (mod (+ (plog-count log) 
+			    (1- init-index))
+			 (plog-count log)))
+	 (magic (nibbles:read-ub32/be stream)
+		(nibbles:read-ub32/be stream)))
 	((or (= magic +msg-magic+)
-	     (= magic 0)))
+	     (= index end-index))
+	 (advance-to-block log index))
       (incf index)
-      (advance-to-next-block log))
-    (advance-to-block log index)))
+      (when (= index (plog-count log))
+	(setf index 0))
+      (advance-to-block log index))))
 
-;; ------------
-
+;; ------------------------------------------------
     
-(defun make-log-stream (mapping-stream &key (size 512) tag)
+(defun make-plog (mapping-stream size &key tag)
+  "Make a plog instance from a mapping stream. 
+SIZE should be the size of each block."
   (file-position mapping-stream 0)
   (let* ((map (mapping-stream-mapping mapping-stream))
 	 (header (read-log-header mapping-stream))
@@ -253,91 +165,116 @@
        ;; zero size, must be a new header
        (setf (log-header-size header) size
 	     (log-header-count header) count
-	     (log-header-index header) size))
+	     (log-header-id header) 0
+	     (log-header-index header) 1))
       ((not (= (log-header-size header) size))
        (error "log header size ~A does not match size ~A" 
 	      (log-header-size header)
 	      size)))
 
+    ;; write the header back to the file
+    (file-position mapping-stream 0)
+    (write-log-header mapping-stream header)
+
     ;; set the initial stream position
     (file-position mapping-stream 
-		   (log-header-index header))
+		   (* size (log-header-index header)))
 
-    ;; make the instance
-    (let ((log (make-instance 'log-stream
-			      :stream mapping-stream
-			      :header header
-			      :tag (let ((octets (flexi-streams:string-to-octets (or tag "DEBG"))))
-				     (assert (= (length octets) 4))
-				     octets)
-			      :count count
-			      :size size)))
-      ;; write the header back to the file
-      ;; this ensures it's initially written when we crated the file
-      (write-header header log)
-      log)))
+    ;; make the log instance 
+    (%make-plog :stream mapping-stream
+		:size size
+		:count count
+		:tag (let ((octets (babel:string-to-octets (or tag "DEBG"))))
+		       (assert (= (length octets) 4))
+		       octets))))
 
 (defun copy-log (log &key tag copy-stream)
   "Make a copy of the log stream, possibly changing the log tag"
-  (let ((header (read-header log)))
-    (make-instance 'log-stream
-		   :stream (if copy-stream
-			       (make-instance 'mapping-stream
-					      :mapping (mapping-stream-mapping 
-							(log-stream-stream log)))
-			       (log-stream-stream log))
-		   :header header
-		   :tag (if tag
-			    (let ((octets (flexi-streams:string-to-octets tag)))
-			      (assert (= (length octets) 4))
-			      octets)
-			    (log-stream-tag log))
-		   :count (log-header-count header)
-		   :size (log-header-size header))))
+  (let ((new-log
+	 (%make-plog :stream (if copy-stream
+				(make-instance 'mapping-stream
+					       :mapping (mapping-stream-mapping 
+							 (plog-stream log)))
+				(plog-stream log))
+		    :tag (if tag
+			     (let ((octets (babel:string-to-octets tag)))
+			       (assert (= (length octets) 4))
+			       octets)
+			     (plog-tag log))
+		    :count (plog-count log)
+		    :size (plog-size log))))
+    (file-position (plog-stream new-log)
+		   (* (plog-size new-log)
+		      (header-index new-log)))
+    new-log))
 		 
-
 (defun read-header (log)
-  (let ((pos (file-position (log-stream-stream log))))
-    (file-position (log-stream-stream log) 0)
-    (prog1 (read-log-header (log-stream-stream log))
-      (file-position (log-stream-stream log) pos))))
+  (let ((stream (plog-stream log)))
+    (with-locked-mapping (stream)
+      (let ((pos (file-position stream)))
+	(file-position stream 0)
+	(prog1 (read-log-header stream)
+	  (file-position stream pos))))))
 
 (defun write-header (header log)
-  (let ((pos (file-position (log-stream-stream log))))
-    (file-position (log-stream-stream log) 0)
-    (prog1 (write-log-header (log-stream-stream log) header)
-      (file-position (log-stream-stream log) pos))))
+  (let ((stream (plog-stream log)))
+    (with-locked-mapping (stream)
+      (let ((pos (file-position stream)))
+	(file-position (plog-stream log) 0)
+	(prog1 (write-log-header stream header)
+	  (file-position stream pos))))))
 
-(defun incf-header-id (log)
-  (let ((pos (file-position (log-stream-stream log))))
-    (file-position (log-stream-stream log) 0)
-    (let ((id (nibbles:read-ub32/be (log-stream-stream log))))
-      (nibbles:write-ub32/be (1+ id) (log-stream-stream log)))
-    (file-position (log-stream-stream log) pos)))
+(defun header-id (log)
+  (let ((stream (plog-stream log)))
+    (let ((pos (file-position stream)))
+      (file-position stream 0)
+      (prog1 (nibbles:read-ub32/be stream)
+	(file-position stream pos)))))
 
+(defun header-index (log)
+  (let ((stream (plog-stream log)))
+    (let ((pos (file-position stream)))
+      (file-position stream 4)
+      (prog1 (nibbles:read-ub32/be stream)
+	(file-position stream pos)))))
 
-(defun write-message (log lvl format-control &rest args)
+(defun set-header-id-index (log id index)
+  (let ((stream (plog-stream log)))
+    (let ((pos (file-position stream)))
+      (file-position stream 0)
+      (nibbles:write-ub32/be id stream)
+      (nibbles:write-ub32/be index stream)
+      (file-position stream pos))))
+
+(defun write-message (log lvl message &key tag)
   "Write a log message"
-  (write-log-message log 
-		     (make-log-message :id (log-header-id (log-stream-header log))
-				       :lvl lvl
-				       :time (get-universal-time)
-				       :tag (log-stream-tag log)
-				       :msg (apply #'format nil format-control args)))
-  (let ((index (advance-to-next-block log)))
-    ;; increment the log id and set the new index
-    (let ((new-header (read-header log)))
-      (incf (log-header-id new-header))
-      (setf (log-header-index new-header) index
-	    (log-stream-header log) new-header)    
-      (write-header new-header log)))
-  nil)
+  (declare (type plog log)
+	   (type (member :info :warning :error) lvl)
+	   (type string message))
+  (let ((stream (plog-stream log)))
+    (with-locked-mapping (stream)
+      (let ((id (header-id log))
+	    (index (header-index log)))
+	(advance-to-block log index)
+	(write-log-message stream
+			   (make-log-message :id id
+					     :lvl lvl
+					     :time (get-universal-time)
+					     :tag (or tag (plog-tag log))
+					     :msg message))
+	(let ((index (advance-to-next-block log)))
+	  ;; increment the log id and set the new index
+	  (set-header-id-index log (1+ id) index))))))
 
 (defun read-message (log)
   "Read the next message from the log"
-  (let ((msg (read-log-message log)))       
-    (advance-to-next-block log)
-    msg))
+  (declare (type plog log))
+  (let ((stream (plog-stream log)))
+    (with-locked-mapping (stream)
+      (let ((msg (read-log-message stream)))
+	(assert (= (log-message-magic msg) +msg-magic+))
+	(advance-to-next-block log)
+	msg))))
 
 (defun write-message-to-stream (stream msg)
   "Format a message tothe stream"
@@ -361,16 +298,15 @@
   (let ((map (open-mapping (or path *default-log-file*)
 			   :size (* count size))))
     (handler-case 
-	(let ((log (make-log-stream (make-mapping-stream map)
-				    :size size
-				    :tag tag)))
-	  log)
+	(make-plog (make-mapping-stream map)
+		   size
+		   :tag tag)
       (error (e)
 	(close-mapping map)
 	(error e)))))
   
 (defun close-log (log)
-  (close-mapping (mapping-stream-mapping (log-stream-stream log))))
+  (close-mapping (mapping-stream-mapping (plog-stream log))))
 
 ;; -----------------------
 
@@ -393,13 +329,14 @@
 (defun follow-log (follower)
   "Print the log messages to the output stream until the exit-p flag is signalled."
   (do ((log (follower-log follower))
+       (stream (plog-stream (follower-log follower)))
        (id 0)
        (output (follower-output follower)))
       ((follower-exit-p follower))
     (sleep 1)
-    (let* ((header (read-header log))
-	   (new-id (1- (log-header-id header))))
-      (when (< id new-id)
+    (let ((new-id (with-locked-mapping (stream)
+		    (header-id log))))
+      (when (> new-id id)
 	(do ((done nil))
 	    (done)
 	  (let ((msg (read-message log)))
@@ -410,14 +347,14 @@
 			   t))
 	      (write-message-to-stream output msg)
 	      (terpri output))
-	    (when (>= (log-message-id msg) new-id)
+	    (when (>= (log-message-id msg) (1- new-id))
 	      (setf done t))))
 	(setf id new-id)))))
 
 (defun start-following (log &key (stream *standard-output*) tag)
   "Start following the log."
   (setf *follower* (make-follower log :stream stream :tag tag))
-  (advance-to-start (follower-log *follower*))
+  (advance-to-next (follower-log *follower*))
   (setf (follower-exit-p *follower*)
 	nil
 	(follower-thread *follower*)
