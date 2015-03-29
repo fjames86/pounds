@@ -5,6 +5,26 @@
 
 (in-package #:pounds)
 
+
+(defun ensure-file-exists (path size)
+  "Ensures the file exists with specified size."
+  (with-open-file (f path 
+		     :direction :io 
+		     :if-exists :overwrite 
+		     :if-does-not-exist :create
+		     :element-type '(unsigned-byte 8))
+    (let ((length (file-length f)))
+      (cond
+	((zerop length)
+	 (file-position f size)
+	 (write-byte 0 f))
+	((and size (> size length))
+	 (file-position f size)
+	 (write-byte 0 f))
+	((not size) 
+	 (setf size length))))))
+
+
 #+(or win32 windows)
 (progn
 
@@ -106,10 +126,10 @@
     :boolean
   (h handle))
 
-(defcfun (%get-file-size "GetFileSize" :convention :stdcall)
-    :uint32
-  (h handle)
-  (high :pointer))
+;;(defcfun (%get-file-size "GetFileSize" :convention :stdcall)
+;;    :uint32
+;;  (h handle)
+;;  (high :pointer))
 
 (defcstruct overlapped 
   (internal :pointer)
@@ -185,26 +205,11 @@
 	      (make-pointer #+(or x86-64 x64 amd64)#xffffffffffffffff
 			    #-(or x86-64 x64 amd64)#xffffffff)))
 
-(defun open-mapping (path &key size)
-  "Opens a file named by PATHSPEC and maps it into memory. If the file is too small it is extended. 
+(defun open-mapping (path size)
+  "Opens a file named by PATH and maps it into memory. If the file is too small it is extended. 
 Returns a MAPPING structure."
-  ;; open, extend and close the file using regular CL functions first 
-  (with-open-file (f path 
-		     :direction :io 
-		     :if-exists :overwrite 
-		     :if-does-not-exist :create
-		     :element-type '(unsigned-byte 8))
-    (let ((length (file-length f)))
-      (cond
-	((zerop length)
-	 (unless size (error "Must provide a size when creating mapping file"))
-	 (file-position f size)
-	 (write-byte 0 f))
-	((and size (> size length))
-	 (file-position f size)
-	 (write-byte 0 f))
-	((not size) 
-	 (setf size length)))))
+  ;; make sure the file actually exists before mapping it 
+  (ensure-file-exists path size)
 
   (let ((fhandle (with-foreign-string (s path)
 		   (%create-file s 
@@ -216,22 +221,6 @@ Returns a MAPPING structure."
 				 (null-pointer)))))
     (when (invalid-handle-p fhandle)
       (get-last-error))
-    ;; extend the file if necessary 
-    (cond
-      (size 
-       (when (> size (%get-file-size fhandle (null-pointer)))
-	 (handler-case (write-file fhandle size #(0))
-	   (error (e)
-	     (%close-handle fhandle)
-	     (error e)))
-	 (%close-handle fhandle)
-	 (open-mapping path :size size)))
-      ((and (not size) 
-	    (zerop (%get-file-size fhandle (null-pointer))))
-       (%close-handle fhandle)
-       (error "Must provide initial size when creating file"))
-      (t 
-       (setf size (%get-file-size fhandle (null-pointer)))))
     
     (let ((mhandle (%create-file-mapping fhandle
 					 (null-pointer) ;; attrs
@@ -259,7 +248,9 @@ Returns a MAPPING structure."
 (defun close-mapping (mapping)
   "Closes the mapping structure."
   (declare (type mapping mapping))
-  (with-slots (fhandle mhandle ptr) mapping
+  (let ((mhandle (mapping-mhandle mapping))
+	(fhandle (mapping-fhandle mapping))
+	(ptr (mapping-ptr mapping)))
     (%unmap-view-of-file ptr)
     (%close-handle mhandle)
     (%close-handle fhandle)))
@@ -268,7 +259,8 @@ Returns a MAPPING structure."
   "Remaps the file mapping to the new size."
   (let ((fhandle (mapping-fhandle mapping)))
     ;; close the file mapping 
-    (with-slots (mhandle ptr) mapping
+    (let ((mhandle (mapping-mhandle mapping))
+	  (ptr (mapping-ptr mapping)))
 	(%unmap-view-of-file ptr)
       (%close-handle mhandle))
 
@@ -421,28 +413,11 @@ Returns a MAPPING structure."
 	      (make-pointer #+(or x86-64 x64 amd64)#xffffffffffffffff
 			    #-(or x86-64 x64 amd64)#xffffffff)))
 
-(defun open-mapping (path &key size)
-  "Opens the file named by PATH and maps it into memory. 
-
-If SIZE is provided, the file is first extended to be SIZE bytes. SIZE must be provided when 
-creating the file."
+(defun open-mapping (path size)
+  "Opens the file named by PATH and maps it into memory.  SIZE is the size in bytes of the file to map."
   ;; use regular CL functions to create the file and check its length
-  (with-open-file (f path 
-		     :direction :io 
-		     :if-exists :overwrite 
-		     :if-does-not-exist :create
-		     :element-type '(unsigned-byte 8))
-    (let ((length (file-length f)))
-      (cond
-	((zerop length)
-	 (unless size (error "Must provide a size when creating mapping file"))
-	 (file-position f size)
-	 (write-byte 0 f))
-	((and size (> size length))
-	 (file-position f size)
-	 (write-byte 0 f))
-	((not size) 
-	 (setf size length)))))
+  (ensure-file-exists path size)
+
   ;; the file is now created and the correct size 
   (let ((fd (with-foreign-string (s path)
 	      (%open s 
@@ -496,7 +471,7 @@ creating the file."
 
 (defun lock-mapping (map)
   (%flock (mapping-fd map)
-	  1)) ;; lock_sh
+	  2)) ;; lock_ex
 
 (defun unlock-mapping (map)
   (%flock (mapping-fd map)

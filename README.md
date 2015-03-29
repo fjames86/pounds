@@ -1,6 +1,6 @@
-# pounds
-Pounds provides several tools for manipulaing block storage from Lisp. This inspired the name, Lisp Block Storage (lbs), the name is somewhat of a misnomer but it has now stuck.
-
+# Pounds
+Pounds provides several tools for common operations on mmaped files. Currently, it offers a stream class
+to read from and write to a mmaped file. Using this, it implements a simple logging system.
 
 ## 1. File mappings
 The base functionality is provided by mmap'ing files and defining a stream class to read/write them. 
@@ -8,8 +8,9 @@ The base functionality is provided by mmap'ing files and defining a stream class
 
 ```
 ;; open a 1MB file and mmap it
-(defparameter *mymap* (open-mapping "mymap.dat" :size (* 1024 1024)))
+(defparameter *mymap* (open-mapping "mymap.dat" (* 1024 1024)))
 
+;; make a stream from the mapping and write to it
 (with-mapping-stream (s *mymap*)
   (write-sequence #(1 2 3 4) s))
 
@@ -21,23 +22,31 @@ The base functionality is provided by mmap'ing files and defining a stream class
 The package POUNDS.LOG (nickname PLOG) implements a circular log by writing to the mmap'ed file. 
 
 ### 2.1 Motivation
-The reason for writing to a log file are twofold: firstly, as an aid to development so that the
-programmer can watch control flow. Secondly, to always be writing this information to the log 
-so that it is possible to diagnose what caused an issue after the event. Typically long-running 
-processes that provide services require such a logging system. This also provides a mechanism
-for recording activity, for example users of the service if it provides an RPC interface.
+Note: I'm aware there are several other logging systems for Common Lisp but I have a specific
+set of requirements which these other libraries didn't provide, so I wrote my own.
 
-Since the typical process will be writing to the log over a long period of time, and often in scenarios
-where latency is an issue, two properties are required: it must be circular (so that we can write an arbitrary 
-number of messages) and writes to the log must not block for a noticable period of time. The pounds logging
-system attempts to provide such a logging system.
+Long running services need to record their activity. For instance, who mounted an NFS, what files they 
+accessed etc. This is needed for two reasons: both for auditing service usage, and as a record of what 
+the service actually did. We need this because when things go wrong, you need a record of what happened
+to analyze. 
+
+We therefore need a logging system which has the following properties:
+* Can write an arbitrary number of messages without running out of space. This means a circular log.
+* Writing to the log must have a very low-latency. Writes should never block for a significant time.
+* Stability and reliability are critical.
+* Portability: working on Windows and Linux is mandatory.
+
+Writing to a mmap'ed file should satisfy the above requirements.
 
 ### 2.2 Usage
 
 Open a log file (creating it if it doesn't exist) by calling OPEN-LOG. If no pathname 
 is provided, a file in the local directory named "pounds.log" will be created. 
+The defualt size is 16k blocks of 128 bytes each (so a 2MB file). This means it can 
+store a maximum of 16k messages. If a message is larger than the block size it will 
+use multiple contiguous blocks.
 
-Write to the log using WRITE-MESSAGE.
+Write a message to the log using WRITE-MESSAGE.
 
 E.g.
 ```
@@ -54,8 +63,8 @@ Follow the log's output by using the command:
 
 (pounds.log:stop-following)
 ``` 
-
-The log operators are thread-safe: you are free to write to the log from different threads. 
+This starts a thread which monitors the log and prints messages to the output stream 
+as they are written to the log. 
 
 It is often the case that different modules of the same program want to write to the same log, but 
 with a tag to differentiate them. 
@@ -72,10 +81,27 @@ with a tag to differentiate them.
                    :tag tag)))
 ```
 
+The log operators (READ-MESSAGE and WRITE-MESSAGE) are thread-safe. It is assumed that 
+the Lisp process is the only process accessing the files -- it is therefore NOT permitted 
+to access a log file simulataneously from multiple Lisp images. It is easy to add this 
+(using flock or equivalent) but since the typical use-case doesn't require it, I don't do it.
+
+### 2.3 Performance
+
+I've not done any rigorous benchmarking but performance feels sufficiently good. I tested on my 
+crummy old laptop (1.5Ghz core 2 duo, 1GB RAM running Windows 8.1). 
+
+I wrote 100,000 messages to a standard 2MB (16k/128) log and it took 100 seconds, SBCL maxed out 1 of my cores. 
+Taking 1ms per write seems acceptable. 
+
+The equivalent experiment using LOG4CL took over 200 seconds to write 10,000 messages 
+before I gave up waiting. Both SBCL and emacs were maxing out a core each. 
+
+
 ## 3. Notes
 
-The primary development platform was SBCL on Windows but it should also work on Linux. It may work on other unix-like platforms but
-I've not tested it there.
+The primary development platform was SBCL on Windows 8.1 but I've used it on Ubuntu Linux.
+It may work on other unix-like platforms but I've not tested it there.
 
 ## License
 

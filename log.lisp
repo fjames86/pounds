@@ -6,7 +6,6 @@
   (:nicknames #:plog)
   (:export #:open-log
 	   #:close-log
-	   #:copy-log
 	   #:start-following
 	   #:stop-following
 	   #:write-message 
@@ -293,10 +292,22 @@ SIZE should be the size of each block."
 (defparameter *default-size* 128)
 
 (defun open-log (&key path count size tag)
+  "Open a log file. 
+PATH should be a string representing a pathname to the log file to use. THe file will be created if it doesn't exist.
+The pathname MUST be in the local system format. So on windows, this means backslashes!
+
+COUNT, if provided, is the number of blocks to use in the log file. Default is 16k.
+
+SIZE is the size of each block. Default is 128 bytes. The total filesize is (* SIZE COUNT).
+
+TAG, if provided, should be a string of exactly 4 characters which is used to tag each message written to the log
+file.
+
+Returns a PLOG structure."
   (unless count (setf count *default-count*))
   (unless size (setf size *default-size*))
   (let ((map (open-mapping (or path *default-log-file*)
-			   :size (* count size))))
+			   (* count size))))
     (handler-case 
 	(make-plog (make-mapping-stream map)
 		   size
@@ -306,6 +317,7 @@ SIZE should be the size of each block."
 	(error e)))))
   
 (defun close-log (log)
+  "Close the log and its associated file mapping."
   (close-mapping (mapping-stream-mapping (plog-stream log))))
 
 ;; -----------------------
@@ -354,7 +366,7 @@ SIZE should be the size of each block."
 	(setf id new-id)))))
 
 (defun start-following (log &key (stream *standard-output*) tag)
-  "Start following the log."
+  "Start following the log. If TAG is provided, only those messages with a matching tag will be displayed."
   (setf *follower* (make-follower log :stream stream :tag tag))
   (advance-to-next (follower-log *follower*))
   (setf (follower-exit-p *follower*)

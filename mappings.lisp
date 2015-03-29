@@ -3,6 +3,8 @@
 
 (in-package #:pounds)
 
+;; implements a stream class to read from and write to the file mapping 
+
 (defclass mapping-stream (trivial-gray-stream-mixin 
 			   fundamental-binary-input-stream 
 			   fundamental-binary-output-stream)
@@ -110,6 +112,10 @@
 (defmethod stream-force-output ((stream mapping-stream))
   (flush-buffers (mapping-stream-mapping stream)))
 
+;; ------------------------------------------
+
+
+
 (defun make-mapping-stream (mapping)
   (make-instance 'mapping-stream 
 		 :mapping mapping))
@@ -118,19 +124,20 @@
   `(let ((,var (make-mapping-stream ,mapping)))
      ,@body))
 
-(defmacro with-mapping ((var filename &key size) &body body)
-  `(let ((,var (open-mapping ,filename :size ,size)))
+(defmacro with-mapping ((var filename size) &body body)
+  `(let ((,var (open-mapping ,filename ,size)))
      (unwind-protect (progn ,@body)
        (close-mapping ,var))))
 
-(defmacro with-open-mapping ((var filename &key size) &body body)
+(defmacro with-open-mapping ((var filename size) &body body)
   "Evaluate the body in the contect of a mapping stream."
   (let ((gmapping (gensym "MAPPING")))
-    `(with-mapping (,gmapping ,filename :size ,size)
+    `(with-mapping (,gmapping ,filename ,size)
        (with-mapping-stream (,var ,gmapping)
 	 ,@body))))
 
 (defmacro with-locked-mapping ((mapping-stream) &body body)
+  "Evaluate the body with the mapping lock held."
   `(bt:with-lock-held ((mapping-lock (mapping-stream-mapping ,mapping-stream)))
      ,@body))
 
