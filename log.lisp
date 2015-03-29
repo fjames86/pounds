@@ -320,6 +320,8 @@ SIZE should be the size of each block."
   tag
   (lvl '(:info :warning :error)))
 
+;; followers need to use a different mapping stream because otherwise writing to the 
+;; log would update the mapping stream position 
 (defun make-follower (log &key (stream *standard-output*) tag)
   "Make a follower for the log streeam specified. Will output the messages to the stream provided."
   (%make-follower :log (copy-log log :copy-stream t)
