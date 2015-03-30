@@ -8,6 +8,7 @@
 	   #:close-log
 	   #:start-following
 	   #:stop-following
+	   #:dump-log
 	   #:write-message 
 	   #:read-message))
 
@@ -21,8 +22,8 @@
 (defstruct log-header 
   id ;; id of next msg to write
   index ;; index of next msg to write
-  count
-  size)
+  count ;; number of blocks 
+  size) ;; block size
 
 (defun read-log-header (stream)
   (declare (type stream stream))
@@ -45,7 +46,8 @@
     (nibbles:write-ub32/be size stream)))
 
 
-(defconstant +msg-magic+ #x3D5B612E)
+(defconstant +msg-magic+ #x3D5B612E
+  "Magic number placed at the start of a message block to make it easy to identify value messages in the log.")
 
 (defstruct log-message
   magic
@@ -54,6 +56,21 @@
   time
   tag
   msg)
+
+(defun level-int (lvl)
+  (ecase lvl
+    (:trace 0)
+    (:debug 1)
+    (:info 2)
+    (:error 3)
+    (:warning 4)))
+(defun int-level (int)
+  (ecase int
+    (0 :trace)
+    (1 :debug)
+    (2 :info)
+    (3 :error)
+    (4 :warning)))
 
 (defun read-log-message (stream)
   (declare (type stream stream))
@@ -71,31 +88,25 @@
       (make-log-message 
        :magic magic
        :id id
-       :lvl (ecase lvl
-	      (1 :info)
-	      (2 :warning)
-	      (4 :error))
+       :lvl (int-level lvl)
        :time time
        :tag tag
        :msg (babel:octets-to-string octets)))))
 
-(defun write-log-message (stream message)
+(defun write-log-message (stream id lvl tag msg)
   (declare (type stream stream)
-	   (type log-message message))
-  (let ((msg (log-message-msg message)))
-    (declare (type string msg))
-    (nibbles:write-ub32/be +msg-magic+ stream)
-    (nibbles:write-ub32/be (log-message-id message) stream)
-    (nibbles:write-ub32/be (ecase (log-message-lvl message)
-			     (:info 1)
-			     (:warning 2)
-			     (:error 4))
-			   stream)
-    (nibbles:write-ub64/be (log-message-time message) stream)
-    (write-sequence (log-message-tag message) stream)
-    (nibbles:write-ub32/be (length msg) stream)
-    (write-sequence (babel:string-to-octets msg)
-		    stream)))
+	   (type integer id)
+	   (type keyword lvl)
+	   (type (vector (unsigned-byte 8) 4) tag)
+	   (type string msg))
+  (nibbles:write-ub32/be +msg-magic+ stream)
+  (nibbles:write-ub32/be id stream)
+  (nibbles:write-ub32/be (level-int lvl) stream)
+  (nibbles:write-ub64/be (get-universal-time) stream)
+  (write-sequence tag stream)
+  (nibbles:write-ub32/be (length msg) stream)
+  (write-sequence (babel:string-to-octets msg)
+		  stream))
 
 (defstruct (plog (:constructor %make-plog)
 		 (:copier %copy-plog))
@@ -246,9 +257,15 @@ SIZE should be the size of each block."
       (file-position stream pos))))
 
 (defun write-message (log lvl message &key tag)
-  "Write a log message"
+  "Write a message to the log. Updates the log header information and advances the underlying mapping stream.
+
+LVL should be a keyword namign a log level.
+
+MESSAGE should be a string with the message to write.
+
+TAG, if provided, will be the message tag, otherwise the default tag for the log will be used.
+"
   (declare (type plog log)
-	   (type (member :info :warning :error) lvl)
 	   (type string message))
   (let ((stream (plog-stream log)))
     (with-locked-mapping (stream)
@@ -256,14 +273,14 @@ SIZE should be the size of each block."
 	    (index (header-index log)))
 	(advance-to-block log index)
 	(write-log-message stream
-			   (make-log-message :id id
-					     :lvl lvl
-					     :time (get-universal-time)
-					     :tag (or tag (plog-tag log))
-					     :msg message))
+			   id
+			   lvl
+			   (or tag (plog-tag log))
+			   message)
 	(let ((index (advance-to-next-block log)))
 	  ;; increment the log id and set the new index
-	  (set-header-id-index log (1+ id) index))))))
+	  (set-header-id-index log (1+ id) index))
+	id))))
 
 (defun read-message (log)
   "Read the next message from the log"
@@ -281,20 +298,21 @@ SIZE should be the size of each block."
       (decode-universal-time (log-message-time msg))
     (declare (ignore i1 i2 i3))
     (format stream
-	    "~D-~D-~D ~2,'0D:~2,'0D:~2,'0D ~A ~A ~A"
+	    "~D-~D-~D ~2,'0D:~2,'0D:~2,'0D ~A:~A ~A"
 	    year month day hour min seconds
 	    (log-message-tag msg)
 	    (log-message-lvl msg)
 	    (log-message-msg msg))))
 
 (defparameter *default-log-file* "pounds.log")
-(defparameter *default-count* (* 1024 16))
-(defparameter *default-size* 128)
+(defconstant +default-count+ (* 1024 16))
+(defconstant +default-size+ 128)
 
 (defun open-log (&key path count size tag)
-  "Open a log file. 
+  "Open a log file, creating it if it doesn't exist.
+
 PATH should be a string representing a pathname to the log file to use. THe file will be created if it doesn't exist.
-The pathname MUST be in the local system format. So on windows, this means backslashes!
+The pathname MUST be in the local system format.
 
 COUNT, if provided, is the number of blocks to use in the log file. Default is 16k.
 
@@ -304,8 +322,8 @@ TAG, if provided, should be a string of exactly 4 characters which is used to ta
 file.
 
 Returns a PLOG structure."
-  (unless count (setf count *default-count*))
-  (unless size (setf size *default-size*))
+  (unless count (setf count +default-count+))
+  (unless size (setf size +default-size+))
   (let ((map (open-mapping (or path *default-log-file*)
 			   (* count size))))
     (handler-case 
@@ -322,7 +340,7 @@ Returns a PLOG structure."
 
 ;; -----------------------
 
-(defparameter *follower* nil)
+(defvar *follower* nil)
 
 (defstruct (follower (:constructor %make-follower))
   thread 
@@ -330,15 +348,16 @@ Returns a PLOG structure."
   log 
   output 
   tag
-  (lvl '(:info :warning :error)))
+  lvl)
 
 ;; followers need to use a different mapping stream because otherwise writing to the 
 ;; log would update the mapping stream position 
-(defun make-follower (log &key (stream *standard-output*) tag)
+(defun make-follower (log &key (stream *standard-output*) tag levels)
   "Make a follower for the log streeam specified. Will output the messages to the stream provided."
   (%make-follower :log (copy-log log :copy-stream t)
 		  :output stream
-		  :tag tag))
+		  :tag tag
+		  :lvl levels))
 
 (defun follow-log (follower)
   "Print the log messages to the output stream until the exit-p flag is signalled."
@@ -354,8 +373,10 @@ Returns a PLOG structure."
 	(do ((done nil))
 	    (done)
 	  (let ((msg (read-message log)))
-	    (when (and (member (log-message-lvl msg)
-			       (follower-lvl follower))
+	    (when (and (if (follower-lvl follower)
+			   (member (log-message-lvl msg)
+				   (follower-lvl follower))
+			   t)
 		       (if (follower-tag follower)
 			   (string-equal (follower-tag follower) (log-message-tag msg))
 			   t))
@@ -365,9 +386,12 @@ Returns a PLOG structure."
 	      (setf done t))))
 	(setf id new-id)))))
 
-(defun start-following (log &key (stream *standard-output*) tag)
+(defun start-following (log &key (stream *standard-output*) tag levels)
   "Start following the log. If TAG is provided, only those messages with a matching tag will be displayed."
-  (setf *follower* (make-follower log :stream stream :tag tag))
+  (setf *follower* (make-follower log 
+				  :stream stream 
+				  :tag tag 
+				  :levels levels))
   (advance-to-next (follower-log *follower*))
   (setf (follower-exit-p *follower*)
 	nil
@@ -383,5 +407,21 @@ Returns a PLOG structure."
   (setf *follower* nil)
   nil)
 
+(defun dump-log (log &key (stream *standard-output*) tag levels)
+  "Dump the contents of the log to the stream. Filters the messages on tag and levels, if provided."
+  (let ((lg (copy-log log :copy-stream t))
+	(id (header-id log)))
+    (advance-to-next lg)
+    (do ((msg (read-message lg) (read-message lg)))
+	((>= (log-message-id msg) (1- id)))
+      (when (and (if levels 
+		     (member (log-message-lvl msg) levels)
+		     t)
+		 (if tag
+		     (string-equal (log-message-tag msg) tag)
+		     t))
+	(write-message-to-stream stream msg)
+	(terpri stream)))))
 
-  
+       
+    

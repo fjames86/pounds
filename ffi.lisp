@@ -306,9 +306,9 @@ Returns a MAPPING structure."
 			      'handle)
 	  (null-pointer))
     (%lock-file-ex (mapping-fhandle map)
-		   2
+		   2 ;; exclusive lock
 		   0
-		   1
+		   1 ;; only lock the 1st byte
 		   0
 		   overlapped)))
 
@@ -325,7 +325,7 @@ Returns a MAPPING structure."
 	  (null-pointer))
     (%unlock-file-ex (mapping-fhandle map)
 		     0
-		     1
+		     1 ;; unlock the 1st byte
 		     0
 		     overlapped)))
 
@@ -361,7 +361,7 @@ Returns a MAPPING structure."
 (defcfun (%open "open")
     :int32
   (path :string)
-  (flags :int32) ;; 64 == o_creat|o_rdwr
+  (flags :int32) ;; 64 == o_creat, 2 == o_rdwr
   (mode :int32)) ;; 438 == rw|rw|rw
 
 (defcfun (%close "close")
@@ -377,6 +377,13 @@ Returns a MAPPING structure."
   (fd :int32)
   (offset :uint32)
   (whence :int32)) ;; 0 == set, 1 == cur, 2 == end
+
+;; we can use lseek to get the file size
+;;(defun get-file-size (fd)
+;;  (let ((len (%lseek fd 0 2)))
+;;    (if (< len 0)
+;;	(get-last-error)
+;;	len)))
 
 (defcfun (%write "write") 
     ssize-t
@@ -495,6 +502,6 @@ Returns a MAPPING structure."
 	((= i count))
       (setf (mem-aref (mapping-ptr mapping) :uint8 (+ offset i))
 	    (elt sequence (+ i start))))
-    (flush-buffers mapping)
+    (flush-buffers mapping) ;; FIXME: should we remove this? seems unnecessary 
     count))
 
