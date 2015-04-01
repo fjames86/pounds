@@ -304,7 +304,7 @@ TAG, if provided, will be the message tag, otherwise the default tag for the log
 	    (log-message-lvl msg)
 	    (log-message-msg msg))))
 
-(defparameter *default-log-file* "pounds.log")
+(defparameter *default-log-file* (merge-pathnames "pounds.log" (user-homedir-pathname)))
 (defconstant +default-count+ (* 1024 16))
 (defconstant +default-size+ 128)
 
@@ -324,7 +324,7 @@ file.
 Returns a PLOG structure."
   (unless count (setf count +default-count+))
   (unless size (setf size +default-size+))
-  (let ((map (open-mapping (or path *default-log-file*)
+  (let ((map (open-mapping (or path (namestring *default-log-file*))
 			   (* count size))))
     (handler-case 
 	(make-plog (make-mapping-stream map)
