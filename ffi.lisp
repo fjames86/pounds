@@ -502,6 +502,6 @@ Returns a MAPPING structure."
 	((= i count))
       (setf (mem-aref (mapping-ptr mapping) :uint8 (+ offset i))
 	    (elt sequence (+ i start))))
-    (flush-buffers mapping) ;; FIXME: should we remove this? seems unnecessary 
+    ;;(flush-buffers mapping) ;; FIXME: should we remove this? seems unnecessary 
     count))
 
