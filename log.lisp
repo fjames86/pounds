@@ -19,6 +19,12 @@
 ;; the operations should be to read and write a log structure to/from it
 
 
+;; we define two structures which get written to disk. I actually 
+;; serialze the structures using XDR, but because the frpc system (which contains the xdr serializer)
+;; depends on this package, I just hand-type the functions. There's only two structures anyway: the log header,
+;; which consumes the 1st block (block 0), and the log message itself (which consumes as many blocks as needed).
+
+
 (defstruct log-header 
   id ;; id of next msg to write
   index ;; index of next msg to write
@@ -50,12 +56,12 @@
   "Magic number placed at the start of a message block to make it easy to identify value messages in the log.")
 
 (defstruct log-message
-  magic
-  id
-  lvl
-  time
-  tag
-  msg)
+  magic ;; message start delimiter
+  id ;; unique message id
+  lvl ;; message severity level
+  time ;; timestamp
+  tag ;; user-configurable string of exactly 4 octets
+  msg) ;; variable length message
 
 (defun level-int (lvl)
   (ecase lvl
@@ -82,7 +88,7 @@
 	       (read-sequence octets stream)
 	       (babel:octets-to-string octets)))
 	(len (nibbles:read-ub32/be stream)))
-    (assert (= magic +msg-magic+))
+;;    (assert (= magic +msg-magic+))
     (let ((octets (nibbles:make-octet-vector len)))
       (read-sequence octets stream)
       (make-log-message 
@@ -235,6 +241,7 @@ SIZE should be the size of each block."
 	  (file-position stream pos))))))
 
 (defun header-id (log)
+  "Read the current message ID from the log header"
   (declare (type plog log))
   (let ((stream (plog-stream log)))
     (declare (type mapping-stream stream))
@@ -244,6 +251,7 @@ SIZE should be the size of each block."
 	(setf (mapping-stream-position stream) pos)))))
 
 (defun header-index (log)
+  "Read the current block index from the header"
   (declare (type plog log))
   (let ((stream (plog-stream log)))
     (declare (type mapping-stream stream))
@@ -253,6 +261,7 @@ SIZE should be the size of each block."
 	(setf (mapping-stream-position stream) pos)))))
 
 (defun set-header-id-index (log id index)
+  "Set the log header message id and block index"
   (let ((stream (plog-stream log)))
     (let ((pos (file-position stream)))
       (file-position stream 0)

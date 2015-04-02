@@ -138,6 +138,11 @@
 
 (defmacro with-locked-mapping ((mapping-stream) &body body)
   "Evaluate the body with the mapping lock held."
-  `(bt:with-lock-held ((mapping-lock (mapping-stream-mapping ,mapping-stream)))
-     ,@body))
+  (let ((gstream (gensym)))
+    `(let ((,gstream ,mapping-stream))
+       (bt:with-lock-held ((mapping-lock (mapping-stream-mapping ,gstream)))
+	 (lock-mapping (mapping-stream-mapping ,gstream))
+	 (unwind-protect (progn ,@body)
+	   (unlock-mapping (mapping-stream-mapping ,gstream)))))))
+
 

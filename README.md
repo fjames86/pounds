@@ -72,10 +72,7 @@ You may dump the contents of the log to a stream, e.g.
   (pounds.log:dump-log *mylog* :stream f))
 ```
 
-The log operators (READ-MESSAGE and WRITE-MESSAGE) are thread-safe. It is assumed that 
-the Lisp process is the only process accessing the files -- it is therefore NOT permitted 
-to access a log file simulataneously from multiple Lisp images. It is easy to add this 
-(using flock or equivalent) but since the typical use-case doesn't require it, I don't do it.
+The log operators (READ-MESSAGE and WRITE-MESSAGE) support both multi-thread and multi-process access to the log files.
 
 ### 2.3 Sharing logs
 
