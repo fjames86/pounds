@@ -155,6 +155,39 @@
   (high :uint32)
   (overlapped :pointer))
 
+(defcfun (%read-file "ReadFile" :convention :stdcall)
+    :boolean
+  (handle :pointer)
+  (buffer :pointer)
+  (count :uint32)
+  (bytes :pointer)
+  (overlapped :pointer))
+
+(defun read-file (handle sequence offset count &key (start 0) end)
+  (with-foreign-objects ((buffer :uint8 count)
+			 (nbytes :uint32)
+			 (overlapped '(:struct overlapped)))
+    (multiple-value-bind (offset-low offset-high) (split-offset offset)
+      (setf (foreign-slot-value overlapped '(:struct overlapped)
+				'offset)
+	    offset-low
+	    (foreign-slot-value overlapped '(:struct overlapped)
+				'offset-high)
+	    offset-high))
+    (let ((res (%read-file handle 
+			   buffer
+			   count 
+			   nbytes
+			   overlapped)))
+      (cond
+	(res
+	 (do ((i start (1+ i)))
+	     ((= i (or end (+ start count))) (mem-ref nbytes :uint32))
+	  (setf (elt sequence i)
+		(mem-aref buffer :uint8 (- i start)))))
+	(t 
+	 (get-last-error))))))
+
 (defcfun (%write-file "WriteFile" :convention :stdcall)
     :boolean
   (handle :pointer)
@@ -395,6 +428,30 @@ Returns a MAPPING structure."
   (with-foreign-object (b :uint8)
     (setf (mem-ref b :uint8) 0)
     (%write fd b 1)))
+(defun write-file (fd offset sequence &key (start 0) end)
+  (%lseek fd offset 0)
+  (let ((count (- (or end (length sequence)) start)))    
+    (with-foreign-object (buffer :uint8 count)
+      (dotimes (i count)
+	(setf (mem-aref buffer :uint8 i)
+	      (elt sequence (+ start i))))
+      (%write fd buffer count))))
+
+(defcfun (%read "read")
+    :int32
+  (fd :int32)
+  (buffer :pointer)
+  (count size-t))
+(defun read-file (fd sequence offset count &key (start 0) end)
+  (%lseek fd offset 0)
+  (let ((count (- (or end (length sequence)) start)))
+    (with-foreign-object (buffer :uint8 count)
+      (%read fd buffer count)
+      (dotimes (i count)
+	(setf (elt sequence (+ start i))
+	      (mem-aref buffer :uint8 i)))))
+  sequence)
+	      
 
 (defcfun (%flock "flock")
     :int32
