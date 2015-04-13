@@ -443,6 +443,7 @@ Returns a MAPPING structure."
   (buffer :pointer)
   (count size-t))
 (defun read-file (fd sequence offset count &key (start 0) end)
+  (declare (ignore count))
   (%lseek fd offset 0)
   (let ((count (- (or end (length sequence)) start)))
     (with-foreign-object (buffer :uint8 count)
