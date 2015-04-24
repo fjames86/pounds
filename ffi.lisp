@@ -240,7 +240,10 @@
 
 (defun open-mapping (path size)
   "Opens a file named by PATH and maps it into memory. If the file is too small it is extended. 
-Returns a MAPPING structure."
+Returns a MAPPING structure. 
+
+PATH ::= string naming the path to the file in the host's filesystem."
+  (declare (type string path))
   ;; make sure the file actually exists before mapping it 
   (ensure-file-exists path size)
 

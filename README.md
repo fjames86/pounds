@@ -1,9 +1,11 @@
 # Pounds
-Pounds provides several tools for common operations on mmaped files. Currently, it offers a stream class
-to read from and write to a mmaped file. Using this, it implements a simple logging system.
+Pounds is intended to provide a collection of tools for operations on block storage. At present its only useful
+features is a stream class over the top of mmaped files and (yet another) logging system which writes to a circular mmaped log.
 
 ## 1. File mappings
 The base functionality is provided by mmap'ing files and defining a stream class to read/write them. 
+
+### 1.1 Usage
 
 ```
 ;; open a 1MB file and mmap it
@@ -18,6 +20,10 @@ The base functionality is provided by mmap'ing files and defining a stream class
 
 If the file does not exist it is created and extended to by SIZE bytes. If the file already 
 exists it is simply opened with the original contents intact, the file will be extended if required.
+
+### 1.2 Platform support
+It works on Windows and Linux. I've not tried on other platforms (BSD, Darwin etc) but since they use the same 
+POSIX APIs as Linux it should work without problem. 
 
 ## 2. Circular logs
 The package POUNDS.LOG (nickname PLOG) implements a circular log by writing to the mmap'ed file. 
