@@ -401,6 +401,8 @@ Returns a PLOG structure."
 
 (defun start-following (log &key (stream *standard-output*) tag levels)
   "Start following the log. If TAG is provided, only those messages with a matching tag will be displayed."
+  (when *follower*
+    (error "Already following"))
   (setf *follower* (make-follower log 
 				  :stream stream 
 				  :tag tag 
