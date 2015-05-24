@@ -559,6 +559,7 @@ PATH ::= string naming the path to the file in the host's filesystem."
 (defun write-mapping-block (sequence mapping offset &key (start 0) end)
   "Write the sequence into the mapping."
   (let ((count (- (or end (length sequence)) start)))
+    (assert (<= (+ offset count) (mapping-size mapping)))
     (do ((i 0 (1+ i)))
 	((= i count))
       (setf (mem-aref (mapping-ptr mapping) :uint8 (+ offset i))

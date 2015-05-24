@@ -78,28 +78,37 @@
     (3 :error)
     (4 :warning)))
 
-(defun read-log-message (stream)
+(defun read-log-message (stream block-size fsize)
   (declare (type stream stream))
-  (let ((magic (nibbles:read-ub32/be stream))
-	(id (nibbles:read-ub32/be stream))
-	(lvl (nibbles:read-ub32/be stream))
-	(time (nibbles:read-ub64/be stream))
-	(tag (let ((octets (nibbles:make-octet-vector 4)))
-	       (read-sequence octets stream)
-	       (babel:octets-to-string octets)))
-	(len (nibbles:read-ub32/be stream)))
-;;    (assert (= magic +msg-magic+))
-    (let ((octets (nibbles:make-octet-vector len)))
-      (read-sequence octets stream)
-      (make-log-message 
-       :magic magic
-       :id id
-       :lvl (int-level lvl)
-       :time time
-       :tag tag
-       :msg (babel:octets-to-string octets)))))
-
-(defun write-log-message (stream id lvl tag msg)
+  (let ((magic (nibbles:read-ub32/be stream)))
+    (unless (= magic +msg-magic+)
+      (return-from read-log-message nil))
+    (let ((id (nibbles:read-ub32/be stream))
+	  (lvl (nibbles:read-ub32/be stream))
+	  (time (nibbles:read-ub64/be stream))
+	  (tag (let ((octets (nibbles:make-octet-vector 4)))
+		 (read-sequence octets stream)
+		 (babel:octets-to-string octets)))
+	  (len (nibbles:read-ub32/be stream)))
+      ;;    (assert (= magic +msg-magic+))
+      (let ((octets (nibbles:make-octet-vector len))
+	    (pos (file-position stream)))
+	(cond
+	  ((<= (+ pos (length octets)) fsize)
+	   (read-sequence octets stream))
+	  (t 
+	   (read-sequence octets stream :end (- fsize pos))
+	   (file-position stream block-size)
+	   (read-sequence octets stream :start (- fsize pos))))
+	(make-log-message 
+	 :magic magic
+	 :id id
+	 :lvl (int-level lvl)
+	 :time time
+	 :tag tag
+	 :msg (babel:octets-to-string octets))))))
+ 
+(defun write-log-message (stream id lvl tag msg block-size fsize)
   (declare (type stream stream)
 	   (type integer id)
 	   (type keyword lvl)
@@ -111,8 +120,15 @@
   (nibbles:write-ub64/be (get-universal-time) stream)
   (write-sequence tag stream)
   (nibbles:write-ub32/be (length msg) stream)
-  (write-sequence (babel:string-to-octets msg)
-		  stream))
+  (let ((octets (babel:string-to-octets msg))
+        (pos (file-position stream)))
+    (cond
+     ((<= (+ pos (length octets)) fsize)
+      (write-sequence octets stream))
+     (t 
+      (write-sequence octets stream :end (- fsize pos))
+      (file-position stream block-size)
+      (write-sequence octets stream :start (- fsize pos))))))
 
 (defstruct (plog (:constructor %make-plog)
 		 (:copier %copy-plog))
@@ -289,7 +305,9 @@ TAG, if provided, will be the message tag, otherwise the default tag for the log
 			   id
 			   lvl
 			   (or tag (plog-tag log))
-			   message)
+			   message
+                           (plog-size log)
+                           (* (plog-size log) (plog-count log)))
 	(let ((index (advance-to-next-block log)))
 	  ;; increment the log id and set the new index
 	  (set-header-id-index log (1+ id) index))
@@ -299,11 +317,24 @@ TAG, if provided, will be the message tag, otherwise the default tag for the log
   "Read the next message from the log"
   (declare (type plog log))
   (let ((stream (plog-stream log)))
-    (with-locked-mapping (stream)
-      (let ((msg (read-log-message stream)))
-	(assert (= (log-message-magic msg) +msg-magic+))
-	(advance-to-next-block log)
-	msg))))
+    (flet ((rmsg ()
+	     (with-locked-mapping (stream)
+	       (let ((msg (read-log-message stream 
+					    (plog-size log) 
+					    (* (plog-size log) (plog-count log)))))
+		 (cond
+		   ((null msg)
+		    (advance-to-next-block log)
+                    nil)
+		   ((= (log-message-magic msg) +msg-magic+)
+		    (advance-to-next-block log)
+		    msg)
+		   (t 
+		    (advance-to-next-block log)
+		    nil))))))
+      (do ((m (rmsg) (rmsg)))
+	  (m m)))))
+
 
 (defun write-message-to-stream (stream msg)
   "Format a message tothe stream"
