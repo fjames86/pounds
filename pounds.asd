@@ -6,6 +6,7 @@
   :author "Frank James <frank.a.james@gmail.com>"
   :description "Lisp block storage"
   :license "MIT"
+  :version "0.1.4"
   :components
   ((:file "package")
    (:file "ffi" :depends-on ("package"))
