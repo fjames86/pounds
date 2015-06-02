@@ -22,7 +22,8 @@
 	 (file-position f size)
 	 (write-byte 0 f))
 	((not size) 
-	 (setf size length))))))
+	 (setf size length)))))
+  (namestring (truename path)))
 
 
 #+(or win32 windows)
@@ -245,7 +246,7 @@ Returns a MAPPING structure.
 PATH ::= string naming the path to the file in the host's filesystem."
   (declare (type string path))
   ;; make sure the file actually exists before mapping it 
-  (ensure-file-exists path size)
+  (let ((path (ensure-file-exists path size)))
 
   (let ((fhandle (with-foreign-string (s path)
 		   (%create-file s 
@@ -279,7 +280,7 @@ PATH ::= string naming the path to the file in the host's filesystem."
 	(make-mapping :fhandle fhandle
 		      :mhandle mhandle
 		      :ptr ptr
-		      :size size)))))
+		      :size size))))))
 
 (defun close-mapping (mapping)
   "Closes the mapping structure."
@@ -484,7 +485,7 @@ PATH ::= string naming the path to the file in the host's filesystem."
 (defun open-mapping (path size)
   "Opens the file named by PATH and maps it into memory.  SIZE is the size in bytes of the file to map."
   ;; use regular CL functions to create the file and check its length
-  (ensure-file-exists path size)
+  (let ((path (ensure-file-exists path size)))
 
   ;; the file is now created and the correct size 
   (let ((fd (with-foreign-string (s path)
@@ -504,7 +505,7 @@ PATH ::= string naming the path to the file in the host's filesystem."
 	(get-last-error))
       (make-mapping :fd fd
 		    :ptr ptr
-		    :size size))))
+		    :size size)))))
   
 (defun close-mapping (mapping)
   "Close the file mapping."
