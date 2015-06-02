@@ -248,39 +248,39 @@ PATH ::= string naming the path to the file in the host's filesystem."
   ;; make sure the file actually exists before mapping it 
   (let ((path (ensure-file-exists path size)))
 
-  (let ((fhandle (with-foreign-string (s path)
-		   (%create-file s 
-				 #xC0000000 ;; access == generic_read|generic_write
-				 3 ;; mode == share_read|share_write
-				 (null-pointer) ;; attrs
-				 4 ;; disposition == open always
-				 128 ;; flags == file attribute normal
-				 (null-pointer)))))
-    (when (invalid-handle-p fhandle)
-      (get-last-error))
-    
-    (let ((mhandle (%create-file-mapping fhandle
-					 (null-pointer) ;; attrs
-					 4 ;; protect == page_readwrite
-					 0 ;; high
-					 0 ;; low
-					 (null-pointer))))
-      (when (null-pointer-p mhandle)
-	(%close-handle fhandle)
+    (let ((fhandle (with-foreign-string (s path)
+		     (%create-file s 
+				   #xC0000000 ;; access == generic_read|generic_write
+				   3 ;; mode == share_read|share_write
+				   (null-pointer) ;; attrs
+				   4 ;; disposition == open always
+				   128 ;; flags == file attribute normal
+				   (null-pointer)))))
+      (when (invalid-handle-p fhandle)
 	(get-last-error))
-      (let ((ptr (%map-view-of-file mhandle
-				    #x001f ;; access == filemapallaccess
-				    0 ;; low
-				    0 ;; high
-				    size)))
-	(when (null-pointer-p ptr)
-	  (%close-handle mhandle)
+      
+      (let ((mhandle (%create-file-mapping fhandle
+					   (null-pointer) ;; attrs
+					   4 ;; protect == page_readwrite
+					   0 ;; high
+					   0 ;; low
+					   (null-pointer))))
+	(when (null-pointer-p mhandle)
 	  (%close-handle fhandle)
 	  (get-last-error))
-	(make-mapping :fhandle fhandle
-		      :mhandle mhandle
-		      :ptr ptr
-		      :size size))))))
+	(let ((ptr (%map-view-of-file mhandle
+				      #x001f ;; access == filemapallaccess
+				      0 ;; low
+				      0 ;; high
+				      size)))
+	  (when (null-pointer-p ptr)
+	    (%close-handle mhandle)
+	    (%close-handle fhandle)
+	    (get-last-error))
+	  (make-mapping :fhandle fhandle
+			:mhandle mhandle
+			:ptr ptr
+			:size size))))))
 
 (defun close-mapping (mapping)
   "Closes the mapping structure."
@@ -294,6 +294,8 @@ PATH ::= string naming the path to the file in the host's filesystem."
 
 (defun remap (mapping size)
   "Remaps the file mapping to the new size."
+  (declare (type mapping mapping)
+	   (type integer size))
   (let ((fhandle (mapping-fhandle mapping)))
     ;; close the file mapping 
     (let ((mhandle (mapping-mhandle mapping))
@@ -328,10 +330,12 @@ PATH ::= string naming the path to the file in the host's filesystem."
 
 (defun flush-buffers (mapping)
   "Ensure changes to the file mapping are written to disk."
+  (declare (type mapping mapping))
   (%flush-file-buffers (mapping-fhandle mapping)))
 
 ;; we lock the first byte and rely on co-operative locking
 (defun lock-mapping (map)
+  (declare (type mapping map))
   (with-foreign-object (overlapped '(:struct overlapped))
     (setf (foreign-slot-value overlapped '(:struct overlapped)
 			      'offset)
@@ -350,6 +354,7 @@ PATH ::= string naming the path to the file in the host's filesystem."
 		   overlapped)))
 
 (defun unlock-mapping (map)
+  (declare (type mapping map))
   (with-foreign-object (overlapped '(:struct overlapped))
     (setf (foreign-slot-value overlapped '(:struct overlapped)
 			      'offset)
@@ -487,25 +492,25 @@ PATH ::= string naming the path to the file in the host's filesystem."
   ;; use regular CL functions to create the file and check its length
   (let ((path (ensure-file-exists path size)))
 
-  ;; the file is now created and the correct size 
-  (let ((fd (with-foreign-string (s path)
-	      (%open s 
-		     2 ;; o_rdwr
-		     600)))) ;; rw
-    (when (< fd 0)
-      (get-last-error))
-    (let ((ptr (%mmap (null-pointer) 
-		      size 
-		      3 ;; prot_read | prot_write
-		      1 ;; map_shared
-		      fd 
-		      0)))
-      (when (invalid-pointer-p ptr)
-	(%close fd)
+    ;; the file is now created and the correct size 
+    (let ((fd (with-foreign-string (s path)
+		(%open s 
+		       2 ;; o_rdwr
+		       600)))) ;; rw
+      (when (< fd 0)
 	(get-last-error))
-      (make-mapping :fd fd
-		    :ptr ptr
-		    :size size)))))
+      (let ((ptr (%mmap (null-pointer) 
+			size 
+			3 ;; prot_read | prot_write
+			1 ;; map_shared
+			fd 
+			0)))
+	(when (invalid-pointer-p ptr)
+	  (%close fd)
+	  (get-last-error))
+	(make-mapping :fd fd
+		      :ptr ptr
+		      :size size)))))
   
 (defun close-mapping (mapping)
   "Close the file mapping."
@@ -516,6 +521,8 @@ PATH ::= string naming the path to the file in the host's filesystem."
 
 (defun remap (mapping size)
   "Remap the file. SIZE should be the new size."
+  (declare (type mapping mapping)
+	   (type integer size))
   (%munmap (mapping-ptr mapping)
 	   (mapping-size mapping))
   ;; write a byte at size
@@ -536,13 +543,16 @@ PATH ::= string naming the path to the file in the host's filesystem."
   
 (defun flush-buffers (mapping)
   "Ensure changes to the file mappign are written to disk"
+  (declare (type mapping mapping))
   (%fsync (mapping-fd mapping)))
 
 (defun lock-mapping (map)
+  (declare (type mapping map))
   (%flock (mapping-fd map)
 	  2)) ;; lock_ex
 
 (defun unlock-mapping (map)
+  (declare (type mapping map))
   (%flock (mapping-fd map)
 	  8)) ;; lock_un
 
