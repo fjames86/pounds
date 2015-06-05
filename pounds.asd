@@ -2,11 +2,11 @@
 ;;;; This code is licensed under the MIT license.
 
 (asdf:defsystem :pounds
-  :name "lbs"
+  :name "pounds"
   :author "Frank James <frank.a.james@gmail.com>"
-  :description "Lisp block storage"
+  :description "Lisp block storage, provides portable file mappings amongst other things."
   :license "MIT"
-  :version "0.1.5"
+  :version "0.1.6"
   :components
   ((:file "package")
    (:file "ffi" :depends-on ("package"))
