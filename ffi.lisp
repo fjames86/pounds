@@ -244,7 +244,6 @@
 Returns a MAPPING structure. 
 
 PATH ::= string naming the path to the file in the host's filesystem."
-  (declare (type string path))
   ;; make sure the file actually exists before mapping it 
   (let ((path (ensure-file-exists path size)))
 
