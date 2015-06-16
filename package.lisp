@@ -6,6 +6,7 @@
   (:use #:cl #:cffi #:trivial-gray-streams)
   (:export #:open-mapping
 	   #:close-mapping
+       #:remap 
 	   #:mapping-stream-position
 	   #:mapping-stream-mapping
 	   #:mapping-size

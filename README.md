@@ -119,7 +119,12 @@ before I gave up waiting. Both SBCL and emacs were maxing out a core each.
     (log:debug "Hello ~A" i)))
 ```
 
-## 3. Notes
+## 3. Fixed block-size database
+The package `POUNDS.DB` provides a simple fixed block-size database. See the example in example/db-test.lisp.
+It can be used to provide shared access to a mmaped array of fixed-sized blocks, each of which stores a value.
+You can lookup, add and delete entries.
+
+## 4. Notes
 
 The primary development platform was SBCL 1.2.7 on Windows 8.1. It has also been used on 32 and 64-bit Linux 
 without any trouble. It may work on other unix-like platforms (e.g. BSD, Darwin) but I've not tested it there. 
