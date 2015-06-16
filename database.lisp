@@ -13,6 +13,7 @@
 
            ;; generic lookup/mapping functions 
            #:find-entry
+           #:find-entry-if
            #:mapentries
 
            ;; macro support for advanced usage
@@ -58,8 +59,7 @@
       (file-position stream 4)
       (nibbles:write-ub32/be (1+ (getf header :seqno)) stream))))
 
-(defun open-db (path reader writer
-                &key (count +default-count+) (block-size +default-block-size+))
+(defun open-db (path reader writer &key count block-size)
   "Open the database.
 
 PATH ::= pathspec
@@ -71,6 +71,8 @@ COUNT ::= default initial count of blocks.
 BLOCK-SIZE ::= the block size. All entries MUST fit within this.
 
 Returns the database object. This should be closed with a call to CLOSE-DB when finished with."
+  (unless count (setf count +default-count+))
+  (unless block-size (setf block-size +default-block-size+))
   (let ((mapping (open-mapping path (* count block-size))))
     (let ((db (make-db :mapping mapping
                        :stream (make-mapping-stream mapping)
@@ -172,6 +174,7 @@ STORE-ENTRY entry, which writes the new entry in this location.
           (return-from find-entry entry))))
   nil)
 
+
 (defun (setf find-entry) (new-entry value db &key test key)
   "Set the entry. Use a value of NIL to clear the entry."
   (declare (type db db))
@@ -204,3 +207,39 @@ STORE-ENTRY entry, which writes the new entry in this location.
       (setf (db-count db) (* (db-count db) 2))
       nil)))
      
+
+(defun find-entry-if (predicate db &key key)
+  (declare (type db db))
+  (doentries (entry db)
+    (when entry
+      (if (funcall predicate
+                   (if key 
+                       (funcall key entry)
+                       entry))
+          (return-from find-entry-if entry))))
+  nil)
+
+(defun (setf find-entry-if) (new-value predicate db &key key)
+  (declare (type db db))
+  (doentries (entry db)
+    (when entry 
+      (when (funcall predicate (if key 
+                                   (funcall key entry)
+                                   entry))
+        (cond
+          (new-value 
+           (store-entry new-value)
+           (return-from find-entry-if))
+          (t 
+           (clear-entry)
+           (return-from find-entry-if))))))
+  ;; no free entries, remap to larger size if adding
+  (when new-value
+    (pounds:with-locked-mapping ((db-stream db))
+      (remap (db-mapping db) (* (db-count db) 2))
+      ;; store new entry
+      (file-position (db-stream db) (db-count db))
+      (write-entry (db-stream db) (db-writer db) new-value)
+      ;; update the count
+      (setf (db-count db) (* (db-count db) 2))))
+  nil)
