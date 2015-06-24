@@ -50,12 +50,16 @@
 	
 (defun test-open ()
   (setf *the-ht* 
-        (open-ht *the-path* 32 
+        (open-ht *the-path*
 		 #'decode-entry #'encode-entry
+         :count 1024
 		 :key-reader #'key-reader
 		 :key-writer #'key-writer
 		 :test #'string=)))
 
+(defun test-close ()
+  (close-ht *the-ht*)
+  (setf *the-ht* nil))
 
 (defun find-person (name)
   (find-hash *the-ht* name))
