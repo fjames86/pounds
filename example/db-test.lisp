@@ -44,6 +44,8 @@
   (setf *the-db* 
         (open-db *the-path* #'decode-entry #'encode-entry)))
 
+(defun test-close ()
+  (close-db *the-db*))
 
 (defun find-person (name)
   (find-entry name *the-db*
@@ -55,9 +57,8 @@
         (make-entry :name name :age age :colour colour)))
 
 (defun remove-person (name)
-  (setf (find-entry name *the-db* 
-                    :test #'string-equal :key #'entry-name)
-        nil))
+  (remove-entry name *the-db* 
+		:test #'string-equal :key #'entry-name))
                     
 (defun list-persons ()
   (mapentries #'identity *the-db*))

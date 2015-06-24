@@ -124,10 +124,7 @@ The package `POUNDS.DB` provides a simple fixed block-size database. See the exa
 It can be used to provide shared access to a mmaped array of fixed-sized blocks, each of which stores a value.
 You can lookup, add and delete entries.
 
-## 4. Open-addressed hash table
-The package `POUNDS.HT` provides a fixed block-size, open-addressed hash table. The usage is essentially the same as the database functionality in `POUNDS.DB`, except performance should be slightly improved for large tables at the cost of increased complexity. See the example in examples/ht-test.lisp.
-
-## 5. Notes
+## 4. Notes
 
 The primary development platform was SBCL 1.2.7 on Windows 8.1. It has also been used on 32 and 64-bit Linux 
 without any trouble. It may work on other unix-like platforms (e.g. BSD, Darwin) but I've not tested it there. 

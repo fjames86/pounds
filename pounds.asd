@@ -12,9 +12,7 @@
    (:file "ffi" :depends-on ("package"))
    (:file "mappings" :depends-on ("ffi"))
    (:file "log" :depends-on ("mappings"))
-   (:file "database" :depends-on ("mappings"))
-   (:file "ht" :depends-on ("mappings")))
+   (:file "database" :depends-on ("mappings")))
   :depends-on (:cffi :trivial-gray-streams 
-		     :nibbles :babel :bordeaux-threads
-		     :flexi-streams))
+		     :nibbles :babel :bordeaux-threads))
 
