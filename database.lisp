@@ -15,7 +15,11 @@
            #:find-entry
 	   #:remove-entry 
            #:find-entry-if
-           #:mapentries))
+           #:mapentries
+	   
+	   ;; macro support for advanced usage 
+	   #:doentries
+	   #:clear-entry))
 
 (in-package #:pounds.db)
 
@@ -115,6 +119,22 @@ Returns the database."
   (declare (type db db))
   (with-locked-db (db)
     (getf (db-header db) :seqno)))
+
+(defmacro doentries ((var db &optional result) &body body)
+  (alexandria:with-gensyms (gstream gi gdb)
+  `(let ((,gdb ,db))
+     (with-locked-db (,gdb)
+       (do ((,gi 1 (1+ ,gi))
+	    (,gstream (db-stream ,gdb)))
+	   ((= ,gi (db-count ,gdb)) ,result)
+	 (file-position ,gstream (* ,gi (db-bsize ,gdb)))
+	 (let ((,var (read-entry ,gstream (db-reader ,gdb))))
+	   (macrolet ((clear-entry ()
+			`(progn
+			   (file-position ,',gstream (* ,',gi (db-bsize ,',gdb)))
+			   (nibbles:write-ub32/be 0 ,',gstream))))
+	     (when ,var
+	       ,@body))))))))
 
 (defun find-entry (item db &key key test)
   "Search for the item in the database."
