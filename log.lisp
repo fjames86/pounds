@@ -456,18 +456,21 @@ Returns a PLOG structure."
 (defun dump-log (log &key (stream *standard-output*) tag levels)
   "Dump the contents of the log to the stream. Filters the messages on tag and levels, if provided."
   (let ((lg (copy-log log :copy-stream t))
-	(id (header-id log)))
+        (id (header-id log)))
     (advance-to-next lg)
-    (do ((msg (read-message lg) (read-message lg)))
-	((>= (log-message-id msg) (1- id)))
+    (do ((msg (read-message lg) (read-message lg))
+         (done nil))
+        (done)
+      (when (>= (log-message-id msg) (1- id))
+        (setf done t))
       (when (and (if levels 
-		     (member (log-message-lvl msg) levels)
-		     t)
-		 (if tag
-		     (string-equal (log-message-tag msg) tag)
-		     t))
-	(write-message-to-stream stream msg)
-	(terpri stream)))))
+                     (member (log-message-lvl msg) levels)
+                     t)
+                 (if tag
+                     (string-equal (log-message-tag msg) tag)
+                     t))
+        (write-message-to-stream stream msg)
+        (terpri stream)))))
 
        
     
