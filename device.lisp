@@ -1,12 +1,14 @@
-;;;; Copyright (c) Frank James 2015 <frank.a.james@gmail.com>
-;;;; This code is licensed under the MIT license.
-
-(in-package #:pounds)
 
 
-#+(or windows win32)
-(progn
+(defpackage #:device 
+  (:use #:cl #:cffi)
+  (:export #:open-device
+	   #:close-device
+	   #:read-block
+	   #:write-block
+	   #:clear-block))
 
+(in-package #:device)
 
 (defstruct device 
   handle geometry)
@@ -31,8 +33,6 @@
 
 ;; flags
 ;; FILE_ATTRIBUTE_NORMAL 128
-
-
 
 #|  
 typedef enum _MEDIA_TYPE {
@@ -67,9 +67,9 @@ typedef enum _MEDIA_TYPE {
 
 
 (defun open-device-handle (name &key (access #x10000000) (mode 0) (disposition 3) (flags 0))
-  (let ((handle (%create-file name access mode (null-pointer) disposition flags (null-pointer))))
-    (if (invalid-handle-p handle)
-        (get-last-error)
+  (let ((handle (pounds::%create-file name access mode (null-pointer) disposition flags (null-pointer))))
+    (if (pounds::invalid-handle-p handle)
+        (pounds::get-last-error)
         handle)))
 
 (defcfun (%device-io-control "DeviceIoControl" :convention :stdcall)
@@ -91,7 +91,12 @@ typedef enum _MEDIA_TYPE {
   (bytes-per-sector :uint32))
 
 (defstruct geometry 
-  cylinders media-type tracks sectors bytes size)
+  (cylinders 0 :type fixnum)
+  (media-type 0 :type fixnum)
+  (tracks 0 :type fixnum)
+  (sectors 0 :type fixnum)
+  (bytes 0 :type fixnum)
+  (size 0 :type integer))
 
 ;; IOCTL_DISK_GET_DRIVE_GEOMETRY == #x70000
 (defun get-disk-geometry (handle)
@@ -123,57 +128,112 @@ typedef enum _MEDIA_TYPE {
 		     (geometry-sectors g)
 		     (geometry-bytes g)))
 	    g)
-	  (get-last-error)))))
+	  (pounds::get-last-error)))))
 
 
-(defun open-device (path)
-  (let ((handle (open-device-handle path :mode #x03)))
-    (handler-case 
-	(let ((geometry (get-disk-geometry handle)))
-	  (make-device :handle handle
-		       :geometry geometry))
-      (error (e)
-	(%close-handle handle)
-	(error e)))))
+(defun open-device (n)
+  (declare (type integer n))
+  (let ((path (format nil "\\\\.\\PhysicalDrive~A" n)))
+    (let ((handle (open-device-handle path :mode #x03)))
+      (handler-case 
+	  (let ((geometry (get-disk-geometry handle)))
+	    (make-device :handle handle
+			 :geometry geometry))
+	(error (e)
+	  (pounds::%close-handle handle)
+	  (error e))))))
   
 (defun close-device (device)
-  (%close-handle (device-handle device)))
+  (declare (type device device))
+  (pounds::%close-handle (device-handle device)))
 
-) ;; windows/win32
+(defun write-block (device block sequence &key (start 0) end)
+  (declare (type device device)
+	   (type integer block)
+	   (type (vector (unsigned-byte 8)) sequence))
+  (let ((offset (* block (geometry-bytes (device-geometry device)))))
+    (pounds::write-file (device-handle device)
+			offset
+			sequence
+			:start start
+			:end end)))
 
-#-(or windows win32)
-(progn
+(defun read-block (device block sequence &key (start 0) end)
+  (declare (type device device)
+	   (type integer block)
+	   (type (vector (unsigned-byte 8)) sequence))
+  (let ((count (- (or end (length sequence)) start))
+	(offset (* block (geometry-bytes (device-geometry device)))))
+    (pounds::read-file (device-handle device)
+		       sequence
+		       offset
+		       count
+		       :start start
+		       :end (or end (+ start count)))))
 
-(defstruct device 
-  fd geometry)
+(defun clear-block (device block &optional (value 0))
+  (declare (type device device)
+	   (type integer block)
+	   (type (unsigned-byte 8) value))
+  (let ((length (geometry-bytes (device-geometry device)))
+	(offset (* block (geometry-bytes (device-geometry device)))))
+    (with-foreign-objects ((buffer :uint8 length)
+			   (nbytes :uint32)
+			   (overlapped '(:struct pounds::overlapped)))
+      ;; initialize the buffer with the constant value 
+      (do ((i 0 (1+ i)))
+	  ((= i length))
+	(setf (mem-aref buffer :uint8 i) value))
+      ;; write to the file 
+      (multiple-value-bind (offset-low offset-high) (pounds::split-offset offset)
+	(setf (foreign-slot-value overlapped '(:struct pounds::overlapped)
+				  'pounds::offset)
+	      offset-low
+	      (foreign-slot-value overlapped '(:struct pounds::overlapped)
+				  'pounds::offset-high)
+	      offset-high))
+      (let ((res (pounds::%write-file (device-handle device)
+				      buffer
+				      length
+				      nbytes
+				      overlapped)))
+	(if res
+	    nil
+	    (pounds::get-last-error))))))
 
-;; FIXME: get device geometry on linux
+(defun move-block (device new-block old-block)
+  (let ((length (geometry-bytes (device-geometry device))))
+    (with-foreign-objects ((buffer :uint8 length)
+			   (nbytes :uint32)
+			   (overlapped '(:struct pounds::overlapped)))
+      ;; start by reading the old block
+      (let ((offset (* old-block (geometry-bytes (device-geometry device)))))
+	(multiple-value-bind (offset-low offset-high) (pounds::split-offset offset)
+	  (setf (foreign-slot-value overlapped '(:struct pounds::overlapped)
+				    'pounds::offset)
+		offset-low
+		(foreign-slot-value overlapped '(:struct pounds::overlapped)
+				    'pounds::offset-high)
+		offset-high)
+	  (pounds::%read-file (device-handle device)
+			      buffer 
+			      length 
+			      nbytes
+			      overlapped)))
+      ;; now write it back out to the new location
+      (let ((offset (* new-block (geometry-bytes (device-geometry device)))))
+	(multiple-value-bind (offset-low offset-high) (pounds::split-offset offset)
+	  (setf (foreign-slot-value overlapped '(:struct pounds::overlapped)
+				    'pounds::offset)
+		offset-low
+		(foreign-slot-value overlapped '(:struct pounds::overlapped)
+				    'pounds::offset-high)
+		offset-high)
+	  (pounds::%write-file (device-handle device)
+			       buffer 
+			       length 
+			       nbytes
+			       overlapped))))))
 
-(defun open-device (path)
-  (let ((fd (%open path 0 0)))
-    (if (< fd 0)
-	(get-last-error)
-	(make-device :fd fd))))
-		     
-(defun close-device (device)
-  (%close (device-fd device)))
-)
 
-
-(defun write-block (device offset sequence &key (start 0) end)
-  (write-file (device-handle device)
-	      offset
-	      sequence
-	      :start start
-	      :end end))
-
-(defun read-block (device offset sequence &key (start 0) end)
-  (let ((count (- (or end (length sequence)) start)))
-    (read-file (device-handle device)
-	       sequence
-	       offset
-	       count
-	       :start start
-	       :end end)))
-
-
+	  
