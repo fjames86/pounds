@@ -2,7 +2,7 @@
 ;;;; This code is licensed under the MIT license.
 
 ;;; This file defines an API for operating on block devices (Windows only).
-;;; Can be used to perform direct I/O on physical disks. Usually best to ensure the disk is "offline".
+;;; Can be used to perform direct I/O on physical disks. 
 ;;; At the moment all the I/O is synchronous, we could add OVERLAPPED calls but 
 ;;; it adds a lot of complexity and there's no need for it right now.
 
