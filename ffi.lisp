@@ -77,6 +77,9 @@
 (defctype size-t 
     #+(or x86-64 x64 amd64):uint64 
     #-(or x86-64 x64 amd64):uint32)
+(defctype ssize-t
+    #+(or x86-64 x64 amd64):int64 
+    #-(or x86-64 x64 amd64):int32)
 
 (defcfun (%create-file-mapping "CreateFileMappingA" :convention :stdcall)
     handle
@@ -450,10 +453,12 @@ PATH ::= string naming the path to the file in the host's filesystem."
       (dotimes (i count)
 	(setf (mem-aref buffer :uint8 i)
 	      (elt sequence (+ start i))))
-      (%write fd buffer count))))
+      (let ((nbytes (%write fd buffer count)))
+	(when (< nbytes 0) (get-last-error))
+	nbytes))))	
 
 (defcfun (%read "read")
-    :int32
+    ssize-t
   (fd :int32)
   (buffer :pointer)
   (count size-t))
@@ -461,11 +466,12 @@ PATH ::= string naming the path to the file in the host's filesystem."
   (%lseek fd offset 0)
   (let ((count (- (or end (length sequence)) start)))
     (with-foreign-object (buffer :uint8 count)
-      (%read fd buffer count)
-      (dotimes (i count)
-	(setf (elt sequence (+ start i))
-	      (mem-aref buffer :uint8 i))))
-    count))
+      (let ((nbytes (%read fd buffer count)))
+	(when (< nbytes 0) (get-last-error))
+	(dotimes (i count)
+	  (setf (elt sequence (+ start i))
+		(mem-aref buffer :uint8 i)))
+	nbytes))))
 
 (defcfun (%flock "flock")
     :int32
