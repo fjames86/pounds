@@ -457,17 +457,15 @@ PATH ::= string naming the path to the file in the host's filesystem."
   (fd :int32)
   (buffer :pointer)
   (count size-t))
-(defun read-file (fd sequence offset count &key (start 0) end)
-  (declare (ignore count))
+(defun read-file (fd sequence offset &key (start 0) end)
   (%lseek fd offset 0)
   (let ((count (- (or end (length sequence)) start)))
     (with-foreign-object (buffer :uint8 count)
       (%read fd buffer count)
       (dotimes (i count)
 	(setf (elt sequence (+ start i))
-	      (mem-aref buffer :uint8 i)))))
-  sequence)
-	      
+	      (mem-aref buffer :uint8 i))))
+    count))
 
 (defcfun (%flock "flock")
     :int32
