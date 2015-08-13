@@ -7,12 +7,14 @@
   :description "Provides portable file mappings and related utilities."
   :license "MIT"
   :version "0.2.0"
+  :serial t
   :components
   ((:file "package")
-   (:file "ffi" :depends-on ("package"))
-   (:file "mappings" :depends-on ("ffi"))
-   (:file "log" :depends-on ("mappings"))
-   (:file "database" :depends-on ("mappings")))
+   (:file "ffi")
+   (:file "mappings")
+   (:file "log")
+   (:file "database")
+   (:file "device"))
   :depends-on (:cffi :trivial-gray-streams 
-		     :nibbles :babel :bordeaux-threads))
+	       :nibbles :babel :bordeaux-threads))
 
