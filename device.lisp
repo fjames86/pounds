@@ -180,14 +180,12 @@
   (declare (type device device)
            (type integer block)
            (type (vector (unsigned-byte 8)) sequence))
-  (let ((count (- (or end (length sequence)) start))
-        (offset (* block (device-bytes device))))
+  (let ((offset (* block (device-bytes device))))
     (pounds::read-file (device-handle device)
 		       sequence
 		       offset
-		       count
 		       :start start
-		       :end (or end (+ start count)))))
+		       :end end)))
 
 (defun clear-block (device block &optional (value 0))
   (declare (type device device)

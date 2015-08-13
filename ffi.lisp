@@ -164,34 +164,35 @@
   (bytes :pointer)
   (overlapped :pointer))
 
-(defun read-file (handle sequence offset count &key (start 0) end)
-  (with-foreign-objects ((buffer :uint8 count)
-			 (nbytes :uint32)
-			 (overlapped '(:struct overlapped)))
-    ;; clear the overlapped struct
-    (dotimes (i (foreign-type-size '(:struct overlapped)))
-      (setf (mem-ref overlapped :uint8 i) 0))
-    (multiple-value-bind (offset-low offset-high) (split-offset offset)
-      (setf (foreign-slot-value overlapped '(:struct overlapped)
-				'offset)
-	    offset-low
-	    (foreign-slot-value overlapped '(:struct overlapped)
-				'offset-high)
-	    offset-high))
-    (let ((res (%read-file handle 
-			   buffer
-			   count 
-			   nbytes
-			   overlapped)))
-      (cond
-	(res
-	 (do ((i start (1+ i)))
-	     ((= i (or end (+ start count))) (mem-ref nbytes :uint32))
-	  (setf (elt sequence i)
-		(mem-aref buffer :uint8 (- i start)))))
-	(t 
-	 (get-last-error))))))
-
+(defun read-file (handle sequence offset &key (start 0) end)
+  (let ((count (- (or end (length sequence)) start)))
+    (with-foreign-objects ((buffer :uint8 count)
+			   (nbytes :uint32)
+			   (overlapped '(:struct overlapped)))
+      ;; clear the overlapped struct
+      (dotimes (i (foreign-type-size '(:struct overlapped)))
+	(setf (mem-ref overlapped :uint8 i) 0))
+      (multiple-value-bind (offset-low offset-high) (split-offset offset)
+	(setf (foreign-slot-value overlapped '(:struct overlapped)
+				  'offset)
+	      offset-low
+	      (foreign-slot-value overlapped '(:struct overlapped)
+				  'offset-high)
+	      offset-high))
+      (let ((res (%read-file handle 
+			     buffer
+			     count 
+			     nbytes
+			     overlapped)))
+	(cond
+	  (res
+	   (do ((i 0 (1+ i)))
+	       ((= i count) (mem-ref nbytes :uint32))
+	     (setf (elt sequence (+ start i))
+		   (mem-aref buffer :uint8 i))))
+	  (t 
+	   (get-last-error)))))))
+  
 (defcfun (%write-file "WriteFile" :convention :stdcall)
     :boolean
   (handle :pointer)
