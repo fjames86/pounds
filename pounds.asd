@@ -13,8 +13,8 @@
    (:file "ffi")
    (:file "mappings")
    (:file "log")
-   (:file "database")
-   (:file "device"))
+   (:file "database"))
+;;   (:file "device"))
   :depends-on (:cffi :trivial-gray-streams 
 	       :nibbles :babel :bordeaux-threads))
 

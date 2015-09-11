@@ -258,33 +258,33 @@
 
 ) ;; Windows 
 
-#-(or win32 windows) 
-(progn
+;; #-(or win32 windows) 
+;; (progn
 
-(defstruct device
-  fd 
-  bytes 
-  size)
+;; (defstruct device
+;;   fd 
+;;   bytes 
+;;   size)
 
-(defun open-device (path)
-  nil)
+;; (defun open-device (path)
+;;   nil)
 
-(defun close-device (device)
-  nil)
+;; (defun close-device (device)
+;;   nil)
 
-(defun read-block (device block sequence &key (start 0) end)
-  nil)
+;; (defun read-block (device block sequence &key (start 0) end)
+;;   nil)
 
-(defun write-block (device block sequence &key (start 0) end)
-  nil)
+;; (defun write-block (device block sequence &key (start 0) end)
+;;   nil)
 
-(defun clear-block (device block &optional (value 0))
-  nil)
+;; (defun clear-block (device block &optional (value 0))
+;;   nil)
 
-(defun move-block (device new-block old-block)
-  nil)
+;; (defun move-block (device new-block old-block)
+;;   nil)
 
 
-) ;; non-Windows
+;; ) ;; non-Windows
 
 
