@@ -478,7 +478,7 @@ PATH ::= string naming the path to the file in the host's filesystem."
 ;;  (%lseek fd offset 0)
   (let ((count (- (or end (length sequence)) start)))
     (with-foreign-object (buffer :uint8 count)
-      (let ((nbytes (%read fd buffer count offset)))
+      (let ((nbytes (%pread fd buffer count offset)))
 	(when (< nbytes 0) (get-last-error))
 	(dotimes (i count)
 	  (setf (elt sequence (+ start i))
