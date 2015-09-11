@@ -568,15 +568,35 @@ PATH ::= string naming the path to the file in the host's filesystem."
   (declare (type mapping mapping))
   (%fsync (mapping-fd mapping)))
 
+;; FIXME: we don't check for errors here. Should really spin 
+;; to cache EINTR and retry in that case.
+
+(defconstant +lock-ex+ 2)
+(defconstant +lock-un+ 8)
+(defconstant +eintr+ 5)
+
 (defun lock-mapping (map)
   (declare (type mapping map))
-  (%flock (mapping-fd map)
-	  2)) ;; lock_ex
+  (do ((res nil))
+      (res (unless (zerop res)
+	     (get-last-error)))
+    (let ((r (%flock (mapping-fd map)
+		     +lock-ex+)))
+      (cond
+	((or (zerop r) (not (= *errno* +eintr+)))
+	 (setf res r))))))
+	
 
 (defun unlock-mapping (map)
   (declare (type mapping map))
-  (%flock (mapping-fd map)
-	  8)) ;; lock_un
+  (do ((res nil))
+      (res (unless (zerop res)
+	     (get-last-error)))
+    (let ((r (%flock (mapping-fd map)
+		     +lock-un+)))
+      (cond
+	((or (zerop r) (not (= *errno* +eintr+)))
+	 (setf res r))))))
 
 )
 
