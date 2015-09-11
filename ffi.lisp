@@ -451,7 +451,7 @@ PATH ::= string naming the path to the file in the host's filesystem."
 ;;  (%lseek fd offset 0)
   (with-foreign-object (b :uint8)
     (setf (mem-ref b :uint8) 0)
-    (%write fd b 1 offset)))
+    (%pwrite fd b 1 offset)))
 (defun write-file (fd offset sequence &key (start 0) end)
 ;;  (%lseek fd offset 0)
   (let ((count (- (or end (length sequence)) start)))    
@@ -459,7 +459,7 @@ PATH ::= string naming the path to the file in the host's filesystem."
       (dotimes (i count)
 	(setf (mem-aref buffer :uint8 i)
 	      (elt sequence (+ start i))))
-      (let ((nbytes (%write fd buffer count offset)))
+      (let ((nbytes (%pwrite fd buffer count offset)))
 	(when (< nbytes 0) (get-last-error))
 	nbytes))))
 
