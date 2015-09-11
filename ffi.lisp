@@ -570,7 +570,7 @@ PATH ::= string naming the path to the file in the host's filesystem."
 
 (defconstant +lock-ex+ 2)
 (defconstant +lock-un+ 8)
-(defconstant +eintr+ 5)
+(defconstant +eintr+ 4)
 
 (defun lock-mapping (map)
   (declare (type mapping map))
