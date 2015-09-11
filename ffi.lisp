@@ -568,9 +568,6 @@ PATH ::= string naming the path to the file in the host's filesystem."
   (declare (type mapping mapping))
   (%fsync (mapping-fd mapping)))
 
-;; FIXME: we don't check for errors here. Should really spin 
-;; to cache EINTR and retry in that case.
-
 (defconstant +lock-ex+ 2)
 (defconstant +lock-un+ 8)
 (defconstant +eintr+ 5)
