@@ -179,7 +179,8 @@ Returns the database."
     ;; if we get here then there are no free entries. we need to grow and remap
     (let ((count (db-count db)))
       (setf (getf (db-header db) :count) (* count 2))
-      (remap (db-mapping db) (* count (db-bsize db)))
+      (remap (db-mapping db) (* count 2 (db-bsize db)))
+      
       ;; write the entry 
       (file-position (db-stream db) (* count (db-bsize db)))
       (write-entry (db-stream db) (db-writer db) value)
