@@ -10,6 +10,8 @@
   (:export #:open-db
            #:close-db
            #:db-seqno
+	   
+	   #:header 
 
            ;; generic lookup/mapping functions 
            #:find-entry
@@ -40,7 +42,6 @@
   (list :count (nibbles:read-ub32/be stream)
 	:fill (nibbles:read-ub32/be stream)
 	:seqno (nibbles:read-ub32/be stream)))
-
 (defun write-header (stream header)
   (declare (type stream stream))
   (file-position stream 0)
@@ -121,7 +122,27 @@ Returns the database."
   (with-locked-db (db)
     (getf (db-header db) :seqno)))
 
+;; public function which allows users to store extra data in the rest of the header block
+(defun header (db reader)
+  (with-locked-db (db)
+    (file-position (db-stream db) 12)
+    (funcall reader (db-stream db))))
+(defun (setf header) (value db writer)
+  (with-locked-db (db)
+    (file-position (db-stream db) 12)
+    (funcall writer (db-stream db) value)))
+
 (defmacro doentries ((var db &optional result) &body body)
+  "Iterate over all entries in the database, evaluating the body forms with VAR bound to each entry.
+
+VAR ::= symbol bound to the entry.
+DB ::= database, as returned from OPEN-DB.
+RESULT ::= optional result form.
+
+The body forms are evaluated in the context of two local macros:
+CLEAR-ENTRY ::= delete the current entry
+UPDATE-ENTRY val ::= overwrite the current entry with VAL.
+"
   (alexandria:with-gensyms (gstream gi gdb)
   `(let ((,gdb ,db))
      (with-locked-db (,gdb)
@@ -251,6 +272,4 @@ Returns the database."
       (let ((entry (read-entry stream (db-reader db))))
 	(when entry 
 	  (push (funcall function entry) vals))))))
-
-
 
