@@ -19,7 +19,8 @@
 	   
 	   ;; macro support for advanced usage 
 	   #:doentries
-	   #:clear-entry))
+	   #:clear-entry
+	   #:update-entry))
 
 (in-package #:pounds.db)
 
@@ -132,7 +133,11 @@ Returns the database."
 	   (macrolet ((clear-entry ()
 			`(progn
 			   (file-position ,',gstream (* ,',gi (db-bsize ,',gdb)))
-			   (nibbles:write-ub32/be 0 ,',gstream))))
+			   (nibbles:write-ub32/be 0 ,',gstream)))
+		      (update-entry (var)
+			`(progn
+			   (file-position ,',gstream (* ,',gi (db-bsize ,',gdb)))
+			   (write-entry ,',gstream (db-writer ,',gdb) ,var))))
 	     (when ,var
 	       ,@body))))))))
 
