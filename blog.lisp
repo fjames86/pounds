@@ -212,19 +212,11 @@ current properties."
   (let ((eblk (xdr-block 16)))
     (read-sequence (xdr-block-buffer eblk) stream)
     (decode-entry eblk)))
-  
-(defun read-blog-entry (stream blk)
+
+(defun write-blog-entry-props (stream e)
   (let ((eblk (xdr-block 16)))
-    (read-sequence (xdr-block-buffer eblk) stream)
-    (let ((e (decode-entry eblk)))
-      ;; only read as much as there is space left in buffer
-      (let ((end (min (+ (xdr-block-offset blk) (entry-count e))
-		      (xdr-block-count blk))))	    
-	(read-sequence (xdr-block-buffer blk) stream
-		       :start (xdr-block-offset blk)
-		       :end end)
-	(setf (xdr-block-offset blk) end))
-      e)))
+    (encode-entry eblk e)
+    (write-sequence (xdr-block-buffer eblk) stream)))
 
 (defun write-blog-entry (stream e blk)
   (let ((eblk (xdr-block 16)))
@@ -246,6 +238,9 @@ current properties."
   (if (zerop i)
       (1- nblocks)
       (1- i)))
+
+;; when there are more blocks to read the count has the high bit set 
+(defconstant +flag-more+ #x80000000)
 
 (declaim (ftype (function (blog (vector (unsigned-byte 8)) &key (:start integer) (:end (or null integer))) *)
 		read-entry))
@@ -294,14 +289,19 @@ TIMESTAMP ::= universal time when the message was written.
 	       (values cnt id timestamp)))
 	  (file-position stream
 			 (+ +block+ (props-header-size props) (* +block+ i)))
-	  (let ((e (read-blog-entry stream blk)))
-	    (incf cnt (entry-count e))
+	  (let* ((e (read-blog-entry-props stream))
+		 (rc (logand (entry-count e) (lognot +flag-more+))))
+	    (read-sequence sequence stream
+			   :start (xdr-block-offset blk)
+			   :end (+ (xdr-block-offset blk) rc))
+	    (incf (xdr-block-offset blk) rc)
+	    (incf cnt rc)
+	    (when (zerop (logand (entry-count e) +flag-more+))
+	      (setf done t))
 	    ;; TODO: check the id doesn't change
 	    (setf id (entry-id e)
-		  timestamp (entry-timestamp e))
-	    ;; the last entry has the high bit set in the count 
-	    (unless (zerop (logand (entry-count e) #x80000000))
-	      (setf done t))))))))
+		  timestamp (entry-timestamp e))))))))
+
 
 (declaim (ftype (function (blog) *) read-entry-details))
 (defun read-entry-details (blog)
@@ -324,11 +324,11 @@ TIMESTAMP ::= universal timestamp of when the message was written."
 	  (file-position stream
 			 (+ +block+ (props-header-size props) (* +block+ i)))
 	  (let ((e (read-blog-entry-props stream)))
-	    (incf cnt (entry-count e))
+	    (incf cnt (logand (entry-count e) (lognot +flag-more+)))
 	    ;; TODO: check the id doesn't change
 	    (setf id (entry-id e)
 		  timestamp (entry-timestamp e))
-	    (unless (zerop (logand (entry-count e) #x80000000))
+	    (when (zerop (logand (entry-count e) +flag-more+))
 	      (setf done t))))))))
 	
 (declaim (ftype (function (blog (vector (unsigned-byte 8)) &key (:start integer) (:end (or null integer))) *)
@@ -352,39 +352,50 @@ Returns the ID of the message that was written."
 	 (blk (make-xdr-block :buffer sequence
 			      :offset start
 			      :count (+ start count))))
-    (multiple-value-bind (nblocks remainder) (truncate count +block-data+)
-      (with-locked-mapping (stream)
-	;; we always read the current props from the file to ensure we are
-	;; consistent incase other processes are writing to it as well
-	(file-position stream 0)
-	(let ((props (read-blog-props stream)))
-	  ;; adjust props
-	  (incf (props-id props))
-	  
-	  (do ((i (props-index props)
-		  (let ((ni (next-index i (props-nblocks props))))
-		    (setf (props-index props) ni)
-		    ni))
-	       (n (1+ nblocks) (1- n)))
-	      ((zerop n))
-	    (file-position stream
-			   (+ +block+ (props-header-size props) (* +block+ i)))
-	    (write-blog-entry stream
-			      (make-entry :id (props-id props)
-					  :timestamp (get-universal-time)
-					  :count (if (= n 1)
-						     (logior remainder
-							     #x80000000)
-						     +block-data+))
-			      blk))
+    (with-locked-mapping (stream)
+      ;; we always read the current props from the file to ensure we are
+      ;; consistent incase other processes are writing to it as well
+      (file-position stream 0)
+      (let ((props (read-blog-props stream)))
+	;; adjust props
+	(incf (props-id props))
+	
+	(do ((i (props-index props)
+		(let ((ni (next-index i (props-nblocks props))))
+		  (setf (props-index props) ni)
+		  ni))
+	     (e (make-entry :id (props-id props)
+			    :timestamp (get-universal-time)))
+	     (cnt count))
+	    ((zerop cnt))
+	  (file-position stream
+			 (+ +block+ (props-header-size props) (* +block+ i)))
+	  ;; set the entry count 
+	  (cond
+	    ;; if the is more data then set the flag 
+	    ((> cnt +block-data+)
+	     (decf cnt +block-data+)
+	     (setf (entry-count e) (logior +block-data+ +flag-more+)))
+	    (t
+	     ;; this is the final block
+	     (setf (entry-count e) cnt
+		   cnt 0)))
 
-	  ;; write back the updated props 
-	  (incf (props-seqno props))	  
-	  (file-position (blog-stream blog) 0)
-	  (write-blog-props (blog-stream blog) props)
-	  
-	  (props-id props))))))
-  
+	  (write-blog-entry-props stream e)
+	  (write-sequence sequence stream
+			  :start (xdr-block-offset blk)
+			  :end (+ (xdr-block-offset blk)
+				  (logand (entry-count e) (lognot +flag-more+))))
+	  (incf (xdr-block-offset blk)
+		(logand (entry-count e) (lognot +flag-more+))))
+	
+	;; write back the updated props 
+	(incf (props-seqno props))	  
+	(file-position (blog-stream blog) 0)
+	(write-blog-props (blog-stream blog) props)
+	
+	(props-id props)))))
+
 (defun reset-blog (blog)
   "Reset the binary log. Clears all data blocks and assigns new tag and seqno."
   (declare (type blog blog))
@@ -394,7 +405,8 @@ Returns the ID of the message that was written."
       (let ((props (blog-props blog)))
 	(setf (props-tag props) (logand (get-universal-time) #xffffffff)
 	      (props-seqno props) 0
-	      (props-id props) 0)
+	      (props-id props) 0
+	      (props-index props) 0)
 	(file-position stream 0)
 	(write-blog-props stream props)
 	
