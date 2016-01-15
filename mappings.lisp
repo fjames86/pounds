@@ -72,7 +72,8 @@
 		      :start start
 		      :end end)
   (incf (mapping-stream-position stream) (- end start))
-  (mapping-stream-position stream))
+  end)
+;;  (mapping-stream-position stream))
         
 (defmethod stream-write-sequence ((stream mapping-stream) sequence start end &key)
   "Returns the index of last byte written."

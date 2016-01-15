@@ -600,6 +600,7 @@ PATH ::= string naming the path to the file in the host's filesystem."
 (defun read-mapping-block (sequence mapping offset &key (start 0) end)
   "Read from the mapping offset into the sequence."
   (let ((count (- (or end (length sequence)) start)))
+    (assert (<= (+ offset count) (mapping-size mapping)))
     (do ((i 0 (1+ i)))
 	((= i count))
       (setf (elt sequence (+ i start))
