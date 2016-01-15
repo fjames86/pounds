@@ -33,6 +33,11 @@
 
 ;;; Requires the DrX system which provides XDR serialization.
 
+;;; TODO: allow the block size to be a user-specified size. We might need much larger blocks e.g. 4MB 
+;;; We currently use a lot of space for entry headers (16 bytes out of 512) which would be reduced
+;;; if the user needs larger blocks.
+
+
 (defpackage #:pounds.blog
   (:use #:cl #:pounds #:drx)
   (:export #:open-blog
@@ -71,7 +76,7 @@
 ;; divided up into 512 byte blocks
 
 (defconstant +block+ 512)
-(defconstant +block-data+ 496)
+(defconstant +block-data+ 496) ;; 16 byte header
 
 (defconstant +blog-version+ 1)
 
@@ -130,6 +135,9 @@ COUNT ::= number of blocks in the log."
 		   (props-header-size props) header-size)
 	     (file-position (blog-stream blog) 0)
 	     (write-blog-props (blog-stream blog) (blog-props blog)))
+	    ((not (= (props-version props) +blog-version+))
+	     (error "file version ~A mismatch (expected ~A)" 
+		    (props-version props) +blog-version+))
 	    ((not (= (props-nblocks props) nblocks))
 	     (error "nblocks mismatch (expected ~A)" (props-nblocks props)))
 	    ((not (= (props-header-size props) header-size))
