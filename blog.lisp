@@ -77,7 +77,7 @@
 ;; divided up into 512 byte blocks
 
 (defconstant +block+ 512)
-(defconstant +block-data+ 496) ;; 8 byte header
+(defconstant +block-data+ 504) ;; 8 byte header
 
 ;; ------------------------------------------------------
 ;; We don't want to depend on DrX because it's not in quicklisp
