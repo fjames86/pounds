@@ -1,4 +1,17 @@
+;;;; Copyright (c) Frank James 2016 <frank.a.james@gmail.com>
+;;;; This code is licensed under the MIT license.
 
+;;; Example of how to use the binary log (blog).
+;;; Usage:
+;;; 1. Open the log, (OPEN-BLOG)
+;;; 2. Start a thread which periodically polls the blog seqno and prints any new message to stream
+;;; (START-FOLLOWING)
+;;; 3. From the REPL, wite some messages to the log, (DOTIMES (I 100) (WRITE-ENTRY "Hello"))
+;;; 4. Observe that the follower gets them and prints them out.
+;;; 5. Stop following (STOP-FOLLOWING)
+;;; 6. Close the blog (CLOSE-BLOG)
+
+;;; Note: this requires the DrX package for serialization.
 
 (defpackage #:blog-test
   (:use #:cl #:drx))

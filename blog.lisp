@@ -31,15 +31,16 @@
 ;;; There is no way of blocking readers until new messages arrive,
 ;;; the only option is to periodically poll for seqno changes.
 
-;;; Requires the DrX system which provides XDR serialization.
+;;; Ordinarily would require the DrX system for serialization, but because it's not
+;;; currently in quicklisp this file contains copies of the relevant bits.
 
 ;;; TODO: allow the block size to be a user-specified size. We might need much larger blocks e.g. 4MB 
-;;; We currently use a lot of space for entry headers (16 bytes out of 512) which would be reduced
+;;; We currently use a lot of space for entry headers (8 bytes out of 512) which would be reduced
 ;;; if the user needs larger blocks.
 
 
 (defpackage #:pounds.blog
-  (:use #:cl #:pounds #:drx)
+  (:use #:cl #:pounds)
   (:export #:open-blog
 	   #:close-blog
 	   #:reset-blog
@@ -76,18 +77,90 @@
 ;; divided up into 512 byte blocks
 
 (defconstant +block+ 512)
-(defconstant +block-data+ 496) ;; 16 byte header
+(defconstant +block-data+ 496) ;; 8 byte header
+
+;; ------------------------------------------------------
+;; We don't want to depend on DrX because it's not in quicklisp
+;; So we macroexpand the serializers and put the supporting functions here instead
+
+(defstruct xdr-block
+  (buffer (make-array +block+ :element-type '(unsigned-byte 8) :initial-element 0)
+	  :type (vector (unsigned-byte 8)))
+  (count +block+ :type integer)
+  (offset 0 :type integer))
+
+(defun xdr-block (&optional count)
+  (make-xdr-block :buffer (make-array (or count +block+)
+				      :element-type '(unsigned-byte 8) :initial-element 0)
+		  :count (or count +block+)))
+
+(defun reset-xdr-block (blk)
+  (declare (type xdr-block blk))
+  (setf (xdr-block-count blk) (length (xdr-block-buffer blk))
+        (xdr-block-offset blk) 0))
+
+(defun space-or-lose (blk n)
+  (declare (type xdr-block blk)
+	   (type integer n))
+  (unless (<= (+ (xdr-block-offset blk) n)
+              (xdr-block-count blk))
+    (error "Truncated XDR buffer")))
+
+(defun decode-uint32 (blk)
+  (declare (type xdr-block blk))
+  (space-or-lose blk 4)
+  (prog1 (nibbles:ub32ref/be (xdr-block-buffer blk)
+                             (xdr-block-offset blk))
+    (incf (xdr-block-offset blk) 4)))
+
+(defun encode-uint32 (blk int32)
+  (declare (type xdr-block blk)
+	   (type integer int32))
+  (space-or-lose blk 4)
+  (setf (nibbles:ub32ref/be (xdr-block-buffer blk)
+                            (xdr-block-offset blk))
+        int32)
+  (incf (xdr-block-offset blk) 4))
+
+
+
+
+;; -------------------------------------
+
 
 (defconstant +blog-version+ 1)
 
-(defxstruct props ()
-  (version :uint32)
-  (nblocks :uint32)
-  (id :uint32)
-  (index :uint32)
-  (tag :uint32)
-  (seqno :uint32)
-  (header-size :uint32))
+;; (defxstruct props ()
+;;   (version :uint32)
+;;   (nblocks :uint32)
+;;   (id :uint32)
+;;   (index :uint32)
+;;   (tag :uint32)
+;;   (seqno :uint32)
+;;   (header-size :uint32))
+(DEFSTRUCT PROPS (VERSION) (NBLOCKS) (ID) (INDEX) (TAG) (SEQNO) (HEADER-SIZE))
+(DEFUN DECODE-PROPS
+    (BLK)
+  (LET ((RET (MAKE-PROPS)))
+    (SETF (PROPS-VERSION RET) (DECODE-UINT32 BLK))
+    (SETF (PROPS-NBLOCKS RET) (DECODE-UINT32 BLK))
+    (SETF (PROPS-ID RET) (DECODE-UINT32 BLK))
+    (SETF (PROPS-INDEX RET) (DECODE-UINT32 BLK))
+    (SETF (PROPS-TAG RET) (DECODE-UINT32 BLK))
+    (SETF (PROPS-SEQNO RET) (DECODE-UINT32 BLK))
+    (SETF (PROPS-HEADER-SIZE RET) (DECODE-UINT32 BLK))
+    RET))
+(DEFUN ENCODE-PROPS
+    (BLK VAL)
+  (PROGN
+    (ENCODE-UINT32 BLK (PROPS-VERSION VAL))
+    (ENCODE-UINT32 BLK (PROPS-NBLOCKS VAL))
+    (ENCODE-UINT32 BLK (PROPS-ID VAL))
+    (ENCODE-UINT32 BLK (PROPS-INDEX VAL))
+    (ENCODE-UINT32 BLK (PROPS-TAG VAL))
+    (ENCODE-UINT32 BLK (PROPS-SEQNO VAL))
+    (ENCODE-UINT32 BLK (PROPS-HEADER-SIZE VAL)))
+  VAL)
 
 (defun read-blog-props (stream)
   (let ((blk (xdr-block +block+)))
@@ -139,7 +212,7 @@ COUNT ::= number of blocks in the log."
 	     (error "file version ~A mismatch (expected ~A)" 
 		    (props-version props) +blog-version+))
 	    ((not (= (props-nblocks props) nblocks))
-	     (error "nblocks mismatch (expected ~A)" (props-nblocks props)))
+	     (error "nblocks mismatch (got ~A, expected ~A)" (props-nblocks props) nblocks))
 	    ((not (= (props-header-size props) header-size))
 	     (error "Header size mismatch (expected ~A)" (props-header-size props)))))
 	
@@ -248,23 +321,36 @@ current properties."
   (setf (props-index (blog-props blog)) index))
 
 
-;; each block has a 16 byte header
-(defxstruct entry ()
-  (id :uint32)
-  (count :uint32))
+;; each block has an 8 byte header
+;; (defxstruct entry ()
+;;   (id :uint32)
+;;   (count :uint32))
+ (DEFSTRUCT ENTRY (ID) (COUNT))
+ (DEFUN DECODE-ENTRY
+     (BLK)
+   (LET ((RET (MAKE-ENTRY)))
+     (SETF (ENTRY-ID RET) (DECODE-UINT32 BLK))
+     (SETF (ENTRY-COUNT RET) (DECODE-UINT32 BLK))
+     RET))
+ (DEFUN ENCODE-ENTRY
+     (BLK VAL)
+   (PROGN
+    (ENCODE-UINT32 BLK (ENTRY-ID VAL))
+    (ENCODE-UINT32 BLK (ENTRY-COUNT VAL)))
+   VAL)
 
 (defun read-blog-entry-props (stream)
-  (let ((eblk (xdr-block 16)))
+  (let ((eblk (xdr-block 8)))
     (read-sequence (xdr-block-buffer eblk) stream)
     (decode-entry eblk)))
 
 (defun write-blog-entry-props (stream e)
-  (let ((eblk (xdr-block 16)))
+  (let ((eblk (xdr-block 8)))
     (encode-entry eblk e)
     (write-sequence (xdr-block-buffer eblk) stream)))
 
 (defun write-blog-entry (stream e blk)
-  (let ((eblk (xdr-block 16)))
+  (let ((eblk (xdr-block 8)))
     (encode-entry eblk e)
     (write-sequence (xdr-block-buffer eblk) stream)
     (write-sequence (xdr-block-buffer blk) stream
