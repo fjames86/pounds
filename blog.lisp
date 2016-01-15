@@ -131,9 +131,9 @@ COUNT ::= number of blocks in the log."
 	     (file-position (blog-stream blog) 0)
 	     (write-blog-props (blog-stream blog) (blog-props blog)))
 	    ((not (= (props-nblocks props) nblocks))
-	     (error "nblocks mismatch"))
+	     (error "nblocks mismatch (expected ~A)" (props-nblocks props)))
 	    ((not (= (props-header-size props) header-size))
-	     (error "Header size mismatch"))))
+	     (error "Header size mismatch (expected ~A)" (props-header-size props)))))
 	
 	blog))))
     
@@ -147,30 +147,62 @@ COUNT ::= number of blocks in the log."
 (declaim (ftype (function (blog (vector (unsigned-byte 8)) &key (:start integer) (:end (or null integer))) *)
 		read-header))
 (defun read-header (blog sequence &key (start 0) end)
-  "Read the user header data."
+  "Read the user header data.
+BLOG ::= binary log
+SEQUENCE ::= octet vector
+START, END ::= region of sequence to read into."
   (declare (type blog blog)
 	   (type (vector (unsigned-byte 8)) sequence)
 	   (type integer start)
 	   (type (or null integer) end)) 
-  (let ((stream (blog-stream blog)))
-    (with-locked-mapping (stream)
-      (file-position stream +block+)
-      (read-sequence sequence stream :start start :end end)))
-  nil)
+
+  ;; adujust the end pointer so that it is always within the header-size bounds 
+  (let ((hs (props-header-size (blog-props blog))))
+    (unless end (setf end (length sequence)))
+
+    (when (> end (+ start hs))
+      (setf end (+ start hs)))
+
+    (let ((stream (blog-stream blog)))
+      (with-locked-mapping (stream)
+	(file-position stream +block+)
+	(read-sequence sequence stream :start start :end end)))))
 
 (declaim (ftype (function (blog (vector (unsigned-byte 8)) &key (:start integer) (:end (or null integer))) *)
 		write-header))
 (defun write-header (blog sequence &key (start 0) end)
-  "Write the user header data."
+  "Write the user header data. 
+BLOG ::= binary log
+SEQUENCE ::= octet vector
+START, END ::= region of sequence to write.
+
+Note that the header is a free-access region with no record of 
+how much of the allocated space (if any) is actually in use."
   (declare (type blog blog)
 	   (type (vector (unsigned-byte 8)) sequence)
 	   (type integer start)
-	   (type (or null integer) end))		 
+	   (type (or null integer) end))
+
+  ;; check the header size 
+  (unless end (setf end (length sequence)))
+  (unless (<= (- end start) (props-header-size (blog-props blog)))
+    (error "Attempt to write ~A bytes into header of size ~A" 
+	   (- end start)
+	   (props-header-size (blog-props blog))))
+
   (let ((stream (blog-stream blog)))
     (with-locked-mapping (stream)
       (file-position stream +block+)
-      (write-sequence sequence stream :start start :end end)))
-  nil)
+      (write-sequence sequence stream :start start :end end)
+
+      ;; increment the seqno
+      (file-position stream 0)
+      (let ((props (read-blog-props stream)))
+	(incf (props-seqno props))
+	(file-position stream 0)
+	(write-blog-props stream props))))
+
+  (- end start))
 
 (defun blog-properties (blog)
   "Read the current blog properties."
@@ -398,11 +430,6 @@ not affect subsequent calls to READ-ENTRY.
 		  msgs)
 	    (setf offset (xdr-block-offset blk))))))))
   
-
-
-
-
-
 ;; writing is much simpler because we always just write at the end.
 (declaim (ftype (function (blog (vector (unsigned-byte 8)) &key (:start integer) (:end (or null integer))) *)
 		write-entry))
