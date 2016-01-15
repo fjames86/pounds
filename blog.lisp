@@ -39,14 +39,20 @@
 	   #:close-blog
 	   #:reset-blog
 	   #:sync-blog 
-	   
+
+	   ;; reading 
 	   #:read-entry
 	   #:read-entry-details
-	   #:write-entry 
+	   #:read-entries
 
+	   ;; writing 
+	   #:write-entry 
+	   
+	   ;; user accessible header 
 	   #:read-header
 	   #:write-header
 	   
+	   ;; read properties 
 	   #:blog-properties))
 	   
 (in-package #:pounds.blog)
@@ -242,6 +248,43 @@ current properties."
 ;; when there are more blocks to read the count has the high bit set 
 (defconstant +flag-more+ #x80000000)
 
+
+(defun read-entry-locked (props stream blk set-props-p)
+  (do ((i (props-index props) (next-index i (props-nblocks props)))
+       (cnt 0)
+       (id 0)
+       (timestamp nil)
+       (done nil))
+      (done
+       (progn 
+	 ;; update the log props so that we advance
+	 ;; but don't write it to the log because only writers do that 
+	 (when set-props-p 
+	   (setf (props-index props) i
+		 (props-id props) id))
+	 
+	 (values cnt id timestamp)))
+    (file-position stream
+		   (+ +block+ (props-header-size props) (* +block+ i)))
+    (let* ((e (read-blog-entry-props stream))
+	   (rc (logand (entry-count e) (lognot +flag-more+))))
+      (when blk 
+	(read-sequence (xdr-block-buffer blk) stream
+		       :start (xdr-block-offset blk)
+		       :end (min (+ (xdr-block-offset blk) rc)
+				 (xdr-block-count blk)))
+	(setf (xdr-block-offset blk) 
+	      (min (+ (xdr-block-offset blk) rc)
+		   (xdr-block-count blk))))
+
+      (incf cnt rc)
+      (when (zerop (logand (entry-count e) +flag-more+))
+	(setf done t))
+
+      ;; TODO: check the id doesn't change
+      (setf id (entry-id e)
+	    timestamp (entry-timestamp e)))))
+
 (declaim (ftype (function (blog (vector (unsigned-byte 8)) &key (:start integer) (:end (or null integer))) *)
 		read-entry))
 (defun read-entry (blog sequence &key (start 0) end)
@@ -274,34 +317,7 @@ TIMESTAMP ::= universal time when the message was written.
 			      :count (+ start count))))
     (with-locked-mapping (stream)
       (let ((props (blog-props blog)))
-	(do ((i (props-index props) (next-index i (props-nblocks props)))
-	     (cnt 0)
-	     (id 0)
-	     (timestamp nil)
-	     (done nil))
-	    (done
-	     (progn 
-	       ;; update the log props so that we advance
-	       ;; but don't write it to the log because only writers do that 
-	       (setf (props-index props) i
-		     (props-id props) id)
-	       
-	       (values cnt id timestamp)))
-	  (file-position stream
-			 (+ +block+ (props-header-size props) (* +block+ i)))
-	  (let* ((e (read-blog-entry-props stream))
-		 (rc (logand (entry-count e) (lognot +flag-more+))))
-	    (read-sequence sequence stream
-			   :start (xdr-block-offset blk)
-			   :end (+ (xdr-block-offset blk) rc))
-	    (incf (xdr-block-offset blk) rc)
-	    (incf cnt rc)
-	    (when (zerop (logand (entry-count e) +flag-more+))
-	      (setf done t))
-	    ;; TODO: check the id doesn't change
-	    (setf id (entry-id e)
-		  timestamp (entry-timestamp e))))))))
-
+	(read-entry-locked props stream blk t)))))
 
 (declaim (ftype (function (blog) *) read-entry-details))
 (defun read-entry-details (blog)
@@ -315,22 +331,79 @@ TIMESTAMP ::= universal timestamp of when the message was written."
   (let ((stream (blog-stream blog)))
     (with-locked-mapping (stream)
       (let ((props (blog-props blog)))
-	(do ((i (props-index props) (next-index i (props-nblocks props)))
-	     (cnt 0)
-	     (id 0)
-	     (timestamp nil)
-	     (done nil))
-	    (done (values cnt id timestamp))
-	  (file-position stream
-			 (+ +block+ (props-header-size props) (* +block+ i)))
-	  (let ((e (read-blog-entry-props stream)))
-	    (incf cnt (logand (entry-count e) (lognot +flag-more+)))
-	    ;; TODO: check the id doesn't change
-	    (setf id (entry-id e)
-		  timestamp (entry-timestamp e))
-	    (when (zerop (logand (entry-count e) +flag-more+))
-	      (setf done t))))))))
+	(read-entry-locked props stream nil nil)))))
+
+
+;; advance the props index to the point where this ID is first found. returns true if found false otherwise 
+(defun advance-to-id (stream props id)
+  (do ((i (props-index props) (next-index i (props-nblocks props)))
+       (started nil t))
+      ((and started (= i (props-index props))) nil)
+    (file-position stream
+		   (+ +block+ (props-header-size props) (* +block+ i)))
+    (let ((e (read-blog-entry-props stream)))
+      (when (= (entry-id e) id)
+	;; found the start of the entry
+	(setf (props-index props) i)
+	(return-from advance-to-id t)))))
 	
+
+(declaim (ftype (function (blog integer integer (vector (unsigned-byte 8)) &key (:start integer) (:end (or null integer))) *)
+		read-entries))
+(defun read-entries (blog id nmsgs sequence &key (start 0) end)
+  "Read a set of messages starting from message ID. 
+
+BLOG ::= the binary log
+ID ::= starting ID.
+NMSGS ::= number of messages to read.
+SEQUENCE ::= octet vector to receive the messages.
+START, END ::= region of sequence to read into.
+
+Returns a list of (count id timestamp start end) for each message.
+COUNT ::= the length of the message, even if it couldn't fit into the buffer.
+ID ::= message ID.
+TIMESTAMP ::= message universal timestamp
+START, END ::= region of SEQUENCE that the message was written into. If the message
+may have only been partially read into SEQUENCE if insufficient space was provided. 
+
+Note that this function does not update the internal properties and therefore does 
+not affect subsequent calls to READ-ENTRY.
+"
+  (declare (type blog blog)
+	   (type integer id nmsgs start)
+	   (type (vector (unsigned-byte 8)) sequence)
+	   (type (or null integer) end))
+  (unless end (setf end (length sequence)))
+
+  (let ((stream (blog-stream blog))
+	(blk (make-xdr-block :buffer sequence
+			     :offset start
+			     :count end)))
+    
+    (with-locked-mapping (stream)
+      (file-position stream 0)
+      (let ((props (read-blog-props stream)))
+	;; advance the props to point to this ID or fail
+	(unless (advance-to-id stream props id)
+	  (return-from read-entries nil))
+
+	;; keep reading entries until count have been read 
+	(do ((n nmsgs (1- n))
+	     (offset start)
+	     (msgs nil))
+	    ((zerop n) (nreverse msgs))
+	  (setf (xdr-block-offset blk) offset)
+	  (multiple-value-bind (cnt id timestamp) (read-entry-locked props stream blk t)
+	    (push (list cnt id timestamp offset (xdr-block-offset blk))
+		  msgs)
+	    (setf offset (xdr-block-offset blk))))))))
+  
+
+
+
+
+
+;; writing is much simpler because we always just write at the end.
 (declaim (ftype (function (blog (vector (unsigned-byte 8)) &key (:start integer) (:end (or null integer))) *)
 		write-entry))
 (defun write-entry (blog sequence &key (start 0) end)
@@ -419,3 +492,7 @@ Returns the ID of the message that was written."
 			 (+ +block+ (props-header-size props) (* +block+ i)))
 	  (write-sequence buff stream))))))
 
+
+      
+
+  
