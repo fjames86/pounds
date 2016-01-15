@@ -40,7 +40,15 @@
   (name :string)
   (timestamp :uint64))
 
-(defun read-entry (blk) 
+(defun print-entry (e id stream) 
+  (multiple-value-bind (sec min hour date month year) (decode-universal-time (entry-timestamp e))
+    (format stream
+	    "~A-~A-~A ~A:~A:~A ~A ~A~%" 
+	    year month date hour min sec
+	    id 
+	    (entry-name e))))
+  
+(defun read-entry (blk stream) 
   (reset-xdr-block blk)
   (multiple-value-bind (count id)
       (pounds.blog:read-entry *blog* 
@@ -50,11 +58,7 @@
     (setf (xdr-block-count blk) count)
     (unless (zerop id)
       (let ((e (decode-entry blk)))
-	(multiple-value-bind (sec min hour date month year) (decode-universal-time (entry-timestamp e))
-	  (format t "~A-~A-~A ~A:~A:~A ~A ~A~%" 
-		  year month date hour min sec
-		  id 
-		  (entry-name e)))))))
+	(print-entry e id stream)))))
 
 (defun write-entry (name)
   (let ((e (make-entry :name name 
@@ -82,10 +86,26 @@
 	((and (not (= (getf p :seqno) (getf props :seqno)))
 	      (> (getf p :id) (getf props :id)))
 	 ;; some messages to read 
+	 ;; harder way, but consistent 
+	 #+nil(progn
+	   (reset-xdr-block blk)
+	   (let ((msgs (pounds.blog:read-entries *blog*
+						 (getf props :id)
+						 (- (getf p :id) (getf props :id))
+						 (xdr-block-buffer blk))))
+	     (dolist (msg msgs)
+	       (destructuring-bind (count id start end) msg
+		 (declare (ignore count))
+		 (setf (xdr-block-offset blk) start
+		       (xdr-block-count blk) end)
+		 (ignore-errors 
+		   (let ((e (decode-entry blk)))
+		     (print-entry e id stream)))))))
+	 ;; simple way but potential consistency issues
 	 (do ((id (getf props :id) (1+ id)))
 	     ((= id (getf p :id)))
 	   (let ((*standard-output* stream))
-	     (read-entry blk))))
+	     (read-entry blk stream))))
 	(t 
 	 ;; nothing to do
 	 nil))
