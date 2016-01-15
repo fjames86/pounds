@@ -48,12 +48,13 @@
 			      :start 0 
 			      :end (xdr-block-count blk))
     (setf (xdr-block-count blk) count)
-    (let ((e (decode-entry blk)))
-      (multiple-value-bind (sec min hour date month year) (decode-universal-time (entry-timestamp e))
-	(format t "~A-~A-~A ~A:~A:~A ~A ~A~%" 
-		year month date hour min sec
-		id 
-		(entry-name e))))))
+    (unless (zerop id)
+      (let ((e (decode-entry blk)))
+	(multiple-value-bind (sec min hour date month year) (decode-universal-time (entry-timestamp e))
+	  (format t "~A-~A-~A ~A:~A:~A ~A ~A~%" 
+		  year month date hour min sec
+		  id 
+		  (entry-name e)))))))
 
 (defun write-entry (name)
   (let ((e (make-entry :name name 
@@ -73,13 +74,22 @@
       (*exiting*)
     (sleep 1)
     (let ((p (pounds.blog:blog-properties *blog*)))
-      (unless (= (getf p :seqno) (getf props :seqno))
-	;; messages to read 
-	(do ((id (getf props :id) (1+ id)))
-	    ((= id (getf p :id)))
-	  (let ((*standard-output* stream))
-	    (read-entry blk)))
-	(setf props p)))))
+      (cond
+	((not (= (getf p :tag) (getf props :tag)))
+	 ;; the log has been reset
+	 (format stream "Blog reset~%")
+	 (pounds.blog:sync-blog *blog*))
+	((and (not (= (getf p :seqno) (getf props :seqno)))
+	      (> (getf p :id) (getf props :id)))
+	 ;; some messages to read 
+	 (do ((id (getf props :id) (1+ id)))
+	     ((= id (getf p :id)))
+	   (let ((*standard-output* stream))
+	     (read-entry blk))))
+	(t 
+	 ;; nothing to do
+	 nil))
+      (setf props p))))
 
 (defun start-following (&optional (stream *standard-output*))
   (setf *exiting* nil)

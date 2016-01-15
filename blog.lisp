@@ -72,10 +72,10 @@
 ;; ...
 ;; data block n - 1
 
-;; divided up into 512 byte blocks
+;; Each block is of a customizable size, set at creation time.
 
 (defconstant +props-block+ 512)
-(defconstant +props-size+ 8)
+(defconstant +entry-size+ 8)
 
 ;; ------------------------------------------------------
 ;; We don't want to depend on DrX because it's not in quicklisp
@@ -572,9 +572,9 @@ Returns the ID of the message that was written."
 	  ;; set the entry count 
 	  (cond
 	    ;; if the is more data then set the flag 
-	    ((> cnt (- (props-block-size props) +props-size+))
-	     (decf cnt (- (props-block-size props) +props-size+))
-	     (setf (entry-count e) (logior (- (props-block-size props) +props-size+) +flag-more+)))
+	    ((> cnt (- (props-block-size props) +entry-size+))
+	     (decf cnt (- (props-block-size props) +entry-size+))
+	     (setf (entry-count e) (logior (- (props-block-size props) +entry-size+) +flag-more+)))
 	    (t
 	     ;; this is the final block
 	     (setf (entry-count e) cnt
