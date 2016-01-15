@@ -26,7 +26,7 @@
 ;;; PROC2:
 ;;; (read-entry *blog* buffer)
 ;;; -> (128 123 3661763585)
-;;; READ-ENTRY returns (values count id timestamp)
+;;; READ-ENTRY returns (values count id)
 ;;;
 ;;; There is no way of blocking readers until new messages arrive,
 ;;; the only option is to periodically poll for seqno changes.
@@ -250,7 +250,6 @@ current properties."
 
 ;; each block has a 16 byte header
 (defxstruct entry ()
-  (timestamp :uint64)
   (id :uint32)
   (count :uint32))
 
@@ -293,7 +292,6 @@ current properties."
   (do ((i (props-index props) (next-index i (props-nblocks props)))
        (cnt 0)
        (id 0)
-       (timestamp nil)
        (done nil))
       (done
        (progn 
@@ -303,7 +301,7 @@ current properties."
 	   (setf (props-index props) i
 		 (props-id props) id))
 	 
-	 (values cnt id timestamp)))
+	 (values cnt id)))
     (file-position stream
 		   (+ +block+ (props-header-size props) (* +block+ i)))
     (let* ((e (read-blog-entry-props stream))
@@ -322,8 +320,7 @@ current properties."
 	(setf done t))
 
       ;; TODO: check the id doesn't change
-      (setf id (entry-id e)
-	    timestamp (entry-timestamp e)))))
+      (setf id (entry-id e)))))
 
 (declaim (ftype (function (blog (vector (unsigned-byte 8)) &key (:start integer) (:end (or null integer))) *)
 		read-entry))
@@ -341,10 +338,9 @@ before calling this to ensure you have allocated sufficient space.
 Updates the blog properties (but does not persist the updated properties) 
 to the index of the next message to read. 
 
-Returns (values count id timestamp) where 
+Returns (values count id) where 
 COUNT ::= the number of bytes in the message.
 ID ::= message ID
-TIMESTAMP ::= universal time when the message was written.
 "
   (declare (type blog blog)
 	   (type (vector (unsigned-byte 8)) sequence)
@@ -363,10 +359,10 @@ TIMESTAMP ::= universal time when the message was written.
 (defun read-entry-details (blog)
   "Read the properties of the next entry.
 BLOG ::= the binary log.
-Returns (values count id timestamp) where
+Returns (values count id) where
 COUTN ::= length of the message
-ID ::= the ID of the message
-TIMESTAMP ::= universal timestamp of when the message was written."
+ID ::= the ID of the message.
+"
   (declare (type blog blog))
   (let ((stream (blog-stream blog)))
     (with-locked-mapping (stream)
@@ -399,10 +395,9 @@ NMSGS ::= number of messages to read.
 SEQUENCE ::= octet vector to receive the messages.
 START, END ::= region of sequence to read into.
 
-Returns a list of (count id timestamp start end) for each message.
+Returns a list of (count id start end) for each message.
 COUNT ::= the length of the message, even if it couldn't fit into the buffer.
 ID ::= message ID.
-TIMESTAMP ::= message universal timestamp
 START, END ::= region of SEQUENCE that the message was written into. If the message
 may have only been partially read into SEQUENCE if insufficient space was provided. 
 
@@ -433,8 +428,8 @@ not affect subsequent calls to READ-ENTRY.
 	     (msgs nil))
 	    ((zerop n) (nreverse msgs))
 	  (setf (xdr-block-offset blk) offset)
-	  (multiple-value-bind (cnt id timestamp) (read-entry-locked props stream blk t)
-	    (push (list cnt id timestamp offset (xdr-block-offset blk))
+	  (multiple-value-bind (cnt id) (read-entry-locked props stream blk t)
+	    (push (list cnt id offset (xdr-block-offset blk))
 		  msgs)
 	    (setf offset (xdr-block-offset blk))))))))
   
@@ -472,8 +467,7 @@ Returns the ID of the message that was written."
 		(let ((ni (next-index i (props-nblocks props))))
 		  (setf (props-index props) ni)
 		  ni))
-	     (e (make-entry :id (props-id props)
-			    :timestamp (get-universal-time)))
+	     (e (make-entry :id (props-id props)))
 	     (cnt count))
 	    ((zerop cnt))
 	  (file-position stream

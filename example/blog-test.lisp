@@ -11,7 +11,7 @@
 (defun open-blog ()
   (unless *blog*
     (setf *blog*
-	  (pounds.blog:open-blog "blog.test"
+	  (pounds.blog:open-blog "blog.log"
 				 :header-size 512
 				 :nblocks (* 16 1024)))))
 

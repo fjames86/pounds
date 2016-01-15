@@ -6,7 +6,7 @@
   :author "Frank James <frank.a.james@gmail.com>"
   :description "Provides portable file mappings and related utilities."
   :license "MIT"
-  :version "0.2.0"
+  :version "0.2.1"
   :serial t
   :components
   ((:file "package")
@@ -14,7 +14,8 @@
    (:file "mappings")
    (:file "log")
    (:file "database"))
-;;   (:file "device"))
+;;   (:file "device")
+;;   (:file "blog"))
   :depends-on (:cffi :trivial-gray-streams 
 	       :nibbles :babel :bordeaux-threads))
 
