@@ -6,9 +6,9 @@
 ;;; but binary messages.
 ;;; The file is divided up into three sections
 ;;; 1. a fixed-sized header containing the general log properties. This consumes
-;;; a region of +block+ bytes (512 bytes).
+;;; a region of +props-block+ bytes (512 bytes).
 ;;; 2. a variable sized region of memory the user may access for any purpose.
-;;; 3. an array of n blocks of size +block+ (512 bytes) each.
+;;; 3. an array of n blocks of a user-customizable size.
 ;;;
 ;;; When the log is initialized it is assigned a unique tag (current time) and
 ;;; a sequence number. Any write into the log increments the sequence number.
@@ -34,10 +34,8 @@
 ;;; Ordinarily would require the DrX system for serialization, but because it's not
 ;;; currently in quicklisp this file contains copies of the relevant bits.
 
-;;; TODO: allow the block size to be a user-specified size. We might need much larger blocks e.g. 4MB 
-;;; We currently use a lot of space for entry headers (8 bytes out of 512) which would be reduced
-;;; if the user needs larger blocks.
-
+;;; We allow the block size to be a user-specified size. We might need much larger blocks e.g. 4MB. 
+;;; Just provide the BLOCK-SIZE option when opening. 
 
 (defpackage #:pounds.blog
   (:use #:cl #:pounds)
@@ -76,23 +74,23 @@
 
 ;; divided up into 512 byte blocks
 
-(defconstant +block+ 512)
-(defconstant +block-data+ 504) ;; 8 byte header
+(defconstant +props-block+ 512)
+(defconstant +props-size+ 8)
 
 ;; ------------------------------------------------------
 ;; We don't want to depend on DrX because it's not in quicklisp
 ;; So we macroexpand the serializers and put the supporting functions here instead
 
 (defstruct xdr-block
-  (buffer (make-array +block+ :element-type '(unsigned-byte 8) :initial-element 0)
+  (buffer (make-array +props-block+ :element-type '(unsigned-byte 8) :initial-element 0)
 	  :type (vector (unsigned-byte 8)))
-  (count +block+ :type integer)
+  (count +props-block+ :type integer)
   (offset 0 :type integer))
 
 (defun xdr-block (&optional count)
-  (make-xdr-block :buffer (make-array (or count +block+)
+  (make-xdr-block :buffer (make-array (or count +props-block+)
 				      :element-type '(unsigned-byte 8) :initial-element 0)
-		  :count (or count +block+)))
+		  :count (or count +props-block+)))
 
 (defun reset-xdr-block (blk)
   (declare (type xdr-block blk))
@@ -137,8 +135,9 @@
 ;;   (index :uint32)
 ;;   (tag :uint32)
 ;;   (seqno :uint32)
-;;   (header-size :uint32))
-(DEFSTRUCT PROPS (VERSION) (NBLOCKS) (ID) (INDEX) (TAG) (SEQNO) (HEADER-SIZE))
+;;   (header-size :uint32)
+;;   (block-size :uint32))
+(DEFSTRUCT PROPS (VERSION) (NBLOCKS) (ID) (INDEX) (TAG) (SEQNO) (HEADER-SIZE) (BLOCK-SIZE))
 (DEFUN DECODE-PROPS
     (BLK)
   (LET ((RET (MAKE-PROPS)))
@@ -149,6 +148,7 @@
     (SETF (PROPS-TAG RET) (DECODE-UINT32 BLK))
     (SETF (PROPS-SEQNO RET) (DECODE-UINT32 BLK))
     (SETF (PROPS-HEADER-SIZE RET) (DECODE-UINT32 BLK))
+    (SETF (PROPS-BLOCK-SIZE RET) (DECODE-UINT32 BLK))
     RET))
 (DEFUN ENCODE-PROPS
     (BLK VAL)
@@ -159,16 +159,17 @@
     (ENCODE-UINT32 BLK (PROPS-INDEX VAL))
     (ENCODE-UINT32 BLK (PROPS-TAG VAL))
     (ENCODE-UINT32 BLK (PROPS-SEQNO VAL))
-    (ENCODE-UINT32 BLK (PROPS-HEADER-SIZE VAL)))
+    (ENCODE-UINT32 BLK (PROPS-HEADER-SIZE VAL))
+    (ENCODE-UINT32 BLK (PROPS-BLOCK-SIZE VAL)))
   VAL)
 
 (defun read-blog-props (stream)
-  (let ((blk (xdr-block +block+)))
+  (let ((blk (xdr-block +props-block+)))
     (read-sequence (xdr-block-buffer blk) stream)
     (decode-props blk)))
 
 (defun write-blog-props (stream props)
-  (let ((blk (xdr-block +block+)))
+  (let ((blk (xdr-block +props-block+)))
     (encode-props blk props)
     (write-sequence (xdr-block-buffer blk) stream
 		    :end (xdr-block-offset blk))))
@@ -178,14 +179,18 @@
   stream
   props)
 
-(defun open-blog (pathspec &key (nblocks 1024) (header-size 0))
+(defun open-blog (pathspec &key (nblocks 1024) (block-size +props-block+) (header-size 0))
   "Open the binary log.
 PATHSPEC ::= path to the file.
-COUNT ::= number of blocks in the log."
+NBLOCKS ::= number of blocks in the log.
+BLOCK-SIZE ::= number of bytes in each block.
+HEADER-SIZE ::= number of bytes to assign to user customizable header.
 
+Returns the BLOG structure. Close using CLOSE-BLOG.
+"
   ;; total file size is properties (1 block), user header and count blocks
   (let ((mapping (open-mapping pathspec
-			       (+ +block+ header-size (* nblocks +block+)))))
+			       (+ +props-block+ header-size (* nblocks block-size)))))
     (handler-bind ((error (lambda (e)
 			    (declare (ignore e))
 			    (close-mapping mapping))))
@@ -205,7 +210,8 @@ COUNT ::= number of blocks in the log."
 		   (props-tag props) (logand (get-universal-time) #xffffffff)
 		   (props-seqno props) 0
 		   (props-index props) 0
-		   (props-header-size props) header-size)
+		   (props-header-size props) header-size
+		   (props-block-size props) block-size)
 	     (file-position (blog-stream blog) 0)
 	     (write-blog-props (blog-stream blog) (blog-props blog)))
 	    ((not (= (props-version props) +blog-version+))
@@ -213,13 +219,17 @@ COUNT ::= number of blocks in the log."
 		    (props-version props) +blog-version+))
 	    ((not (= (props-nblocks props) nblocks))
 	     (error "nblocks mismatch (got ~A, expected ~A)" (props-nblocks props) nblocks))
+	    ((not (= (props-block-size props) block-size))
+	     (error "block-size mismatch (got ~A, expected ~A)" (props-block-size props) block-size))
 	    ((not (= (props-header-size props) header-size))
 	     (error "Header size mismatch (got ~A expected ~A)" (props-header-size props) header-size))))
 	
 	blog))))
     
+(declaim (ftype (function (blog) *) close-blog))
 (defun close-blog (blog)
   "Close the binary log and free all resources."
+  (declare (type blog blog))
   (close-mapping (blog-mapping blog))
   (setf (blog-mapping blog) nil
 	(blog-stream blog) nil)
@@ -246,7 +256,7 @@ START, END ::= region of sequence to read into."
 
     (let ((stream (blog-stream blog)))
       (with-locked-mapping (stream)
-	(file-position stream +block+)
+	(file-position stream +props-block+)
 	(read-sequence sequence stream :start start :end end)))))
 
 (declaim (ftype (function (blog (vector (unsigned-byte 8)) &key (:start integer) (:end (or null integer))) *)
@@ -273,7 +283,7 @@ how much of the allocated space (if any) is actually in use."
 
   (let ((stream (blog-stream blog)))
     (with-locked-mapping (stream)
-      (file-position stream +block+)
+      (file-position stream +props-block+)
       (write-sequence sequence stream :start start :end end)
 
       ;; increment the seqno
@@ -292,6 +302,7 @@ how much of the allocated space (if any) is actually in use."
     (file-position (blog-stream blog) 0)
     (let ((props (read-blog-props (blog-stream blog))))
       (list :nblocks (props-nblocks props)
+	    :block-size (props-block-size props)
 	    :id (props-id props)
 	    :index (props-index props)
 	    :tag (props-tag props)
@@ -389,7 +400,7 @@ current properties."
 	 
 	 (values cnt id)))
     (file-position stream
-		   (+ +block+ (props-header-size props) (* +block+ i)))
+		   (+ +props-block+ (props-header-size props) (* (props-block-size props) i)))
     (let* ((e (read-blog-entry-props stream))
 	   (rc (logand (entry-count e) (lognot +flag-more+))))
       (when blk 
@@ -462,7 +473,7 @@ ID ::= the ID of the message.
        (started nil t))
       ((and started (= i (props-index props))) nil)
     (file-position stream
-		   (+ +block+ (props-header-size props) (* +block+ i)))
+		   (+ +props-block+ (props-header-size props) (* (props-block-size props) i)))
     (let ((e (read-blog-entry-props stream)))
       (when (= (entry-id e) id)
 	;; found the start of the entry
@@ -557,13 +568,13 @@ Returns the ID of the message that was written."
 	     (cnt count))
 	    ((zerop cnt))
 	  (file-position stream
-			 (+ +block+ (props-header-size props) (* +block+ i)))
+			 (+ +props-block+ (props-header-size props) (* (props-block-size props) i)))
 	  ;; set the entry count 
 	  (cond
 	    ;; if the is more data then set the flag 
-	    ((> cnt +block-data+)
-	     (decf cnt +block-data+)
-	     (setf (entry-count e) (logior +block-data+ +flag-more+)))
+	    ((> cnt (- (props-block-size props) +props-size+))
+	     (decf cnt (- (props-block-size props) +props-size+))
+	     (setf (entry-count e) (logior (- (props-block-size props) +props-size+) +flag-more+)))
 	    (t
 	     ;; this is the final block
 	     (setf (entry-count e) cnt
@@ -599,12 +610,12 @@ Returns the ID of the message that was written."
 	(write-blog-props stream props)
 	
 	(do ((i 1 (1+ i))
-	     (buff (make-array +block+
+	     (buff (make-array (props-block-size props)
 			       :element-type '(unsigned-byte 8)
 			       :initial-element 0)))
 	    ((= i (props-nblocks props)) props)
 	  (file-position stream
-			 (+ +block+ (props-header-size props) (* +block+ i)))
+			 (+ +props-block+ (props-header-size props) (* (props-block-size props) i)))
 	  (write-sequence buff stream))))))
 
 

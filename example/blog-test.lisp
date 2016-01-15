@@ -26,6 +26,7 @@
     (setf *blog*
 	  (pounds.blog:open-blog "blog.log"
 				 :header-size 512
+				 :block-size 64
 				 :nblocks (* 16 1024)))))
 
 
