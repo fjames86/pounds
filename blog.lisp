@@ -214,7 +214,7 @@ COUNT ::= number of blocks in the log."
 	    ((not (= (props-nblocks props) nblocks))
 	     (error "nblocks mismatch (got ~A, expected ~A)" (props-nblocks props) nblocks))
 	    ((not (= (props-header-size props) header-size))
-	     (error "Header size mismatch (expected ~A)" (props-header-size props)))))
+	     (error "Header size mismatch (got ~A expected ~A)" (props-header-size props) header-size))))
 	
 	blog))))
     
