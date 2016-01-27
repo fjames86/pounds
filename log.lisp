@@ -217,7 +217,8 @@ SIZE should be the size of each block."
 		:size size
 		:count count
 		:tag (let ((octets (babel:string-to-octets (or tag "DEBG"))))
-		       (assert (= (length octets) 4))
+		       (unless (= (length octets) 4)
+			 (error "Tag length MUST be 4"))
 		       octets))))
 
 (defun copy-log (log &key tag copy-stream)
@@ -230,7 +231,8 @@ SIZE should be the size of each block."
 				(plog-stream log))
 		    :tag (if tag
 			     (let ((octets (babel:string-to-octets tag)))
-			       (assert (= (length octets) 4))
+			       (unless (= (length octets) 4)
+				 (error "Tag length MUST be 4"))
 			       octets)
 			     (plog-tag log))
 		    :count (plog-count log)
